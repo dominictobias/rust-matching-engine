@@ -541,7 +541,7 @@ impl OrderBook {
         }
 
         if let Some(level) = &mut self.levels[price_tick as usize] {
-            if let Some(index) = level.orders.iter().position(|o| o.id == order_id) {
+            if let Ok(index) = level.orders.binary_search_by_key(&order_id, |o| o.id) {
                 // Check if the side matches
                 let order = &level.orders[index];
                 if order.side != side {
