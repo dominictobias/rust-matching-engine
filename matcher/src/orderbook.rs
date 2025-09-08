@@ -535,6 +535,11 @@ impl OrderBook {
         self.total_orders += 1;
     }
 
+    /// Get the total number of orders in the book
+    pub fn total_orders(&self) -> u64 {
+        self.total_orders
+    }
+
     pub fn cancel_order(&mut self, order_id: u64, price_tick: u64, side: OrderSide) -> bool {
         if (price_tick as usize) >= self.levels.len() {
             return false;
