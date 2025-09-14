@@ -1,57 +1,82 @@
 use axum::{
-    Json, Router,
-    http::StatusCode,
-    routing::{get, post},
+    Router,
+    routing::{delete, get, post},
 };
-use serde::{Deserialize, Serialize};
+use matcher::orderbook::OrderBook;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use tower::ServiceBuilder;
+use tower_http::cors::CorsLayer;
+
+mod middleware;
+mod models;
+mod routes;
+
+use models::InMemoryStorage;
+use routes::markets::get_markets;
+use routes::orders::{add_order, cancel_order, get_depth};
+use routes::users::{get_profile, login};
+
+// Application state containing multiple order books and in-memory storage
+#[derive(Clone)]
+pub struct AppState {
+    pub order_books: Arc<Mutex<HashMap<String, OrderBook>>>,
+    pub storage: InMemoryStorage,
+}
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // initialize tracing
     tracing_subscriber::fmt::init();
 
-    // build our application with a route
-    let app = Router::new()
-        // `GET /` goes to `root`
-        .route("/", get(root))
-        // `POST /users` goes to `create_user`
-        .route("/users", post(create_user));
+    // Initialize in-memory storage
+    let storage = InMemoryStorage::new();
+    tracing::info!("In-memory storage initialized successfully");
 
-    // run our app with hyper, listening globally on port 3000
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-    axum::serve(listener, app).await.unwrap();
-}
+    // Create order books for different symbols
+    let mut order_books = HashMap::new();
+    order_books.insert(
+        "BTC-USD".to_string(),
+        OrderBook::new("BTC-USD".to_string(), 1_000_000),
+    );
+    order_books.insert(
+        "SOL-USD".to_string(),
+        OrderBook::new("SOL-USD".to_string(), 1_000_000),
+    );
 
-// basic handler that responds with a static string
-async fn root() -> &'static str {
-    "Hello, World!"
-}
-
-async fn create_user(
-    // this argument tells axum to parse the request body
-    // as JSON into a `CreateUser` type
-    Json(payload): Json<CreateUser>,
-) -> (StatusCode, Json<User>) {
-    // insert your application logic here
-    let user = User {
-        id: 1337,
-        username: payload.username,
+    let state = AppState {
+        order_books: Arc::new(Mutex::new(order_books)),
+        storage,
     };
 
-    // this will be converted into a JSON response
-    // with a status code of `201 Created`
-    (StatusCode::CREATED, Json(user))
+    // build our application with routes
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/orders", post(add_order))
+        .route("/orders/{id}", delete(cancel_order))
+        .route("/depth", get(get_depth))
+        .route("/markets", get(get_markets))
+        .route("/login", post(login))
+        .route("/users/profile", get(get_profile))
+        .route("/profile", get(get_profile))
+        .route("/health", get(health_check))
+        .layer(ServiceBuilder::new().layer(CorsLayer::permissive()))
+        .with_state(state);
+
+    // run our app with hyper, listening globally on port 6957
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:6957").await?;
+    tracing::info!("Server running on http://0.0.0.0:6957");
+    axum::serve(listener, app).await?;
+
+    Ok(())
 }
 
-// the input to our `create_user` handler
-#[derive(Deserialize)]
-struct CreateUser {
-    username: String,
+// Health check endpoint
+async fn health_check() -> &'static str {
+    "OK"
 }
 
-// the output to our `create_user` handler
-#[derive(Serialize)]
-struct User {
-    id: u64,
-    username: String,
+// Root endpoint
+async fn root() -> &'static str {
+    "Trade Engine API - Use POST /login to authenticate, POST /orders to add orders, DELETE /orders/{id} to cancel"
 }

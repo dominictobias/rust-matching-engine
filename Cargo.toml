@@ -1,3 +1,3 @@
 [workspace]
 resolver = "3"
-members = [ "http-server","matcher"]
+members = ["http-server", "matcher"]

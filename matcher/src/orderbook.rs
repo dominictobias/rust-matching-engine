@@ -1,11 +1,25 @@
 use super::types::{Order, OrderSide, TimeInForce, Trade};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub struct PriceLevel {
     orders: VecDeque<Order>,
     total_quantity: u64,
+}
+
+/// Represents a price level for depth retrieval
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DepthLevel {
+    pub price_tick: u64,
+    pub quantity: u64,
+}
+
+/// Depth data for both sides of the orderbook
+#[derive(Debug, Clone)]
+pub struct OrderBookDepth {
+    pub bids: Vec<DepthLevel>,
+    pub asks: Vec<DepthLevel>,
 }
 
 /// Represents one side of the orderbook (bid or ask)
@@ -15,9 +29,13 @@ pub struct OrderbookSide {
     pub worst_tick: Option<u64>,
     /// true if higher prices are better (for bids), false if lower prices are better (for asks)
     pub higher_is_better: bool,
+    /// Efficient tracking of active price levels (price -> quantity)
+    /// BTreeMap automatically keeps prices sorted
+    pub active_levels: BTreeMap<u64, u64>,
 }
 
 pub struct OrderBook {
+    symbol: String,
     levels: Vec<Option<PriceLevel>>,
 
     /// Ask side of the orderbook (lower prices are better)
@@ -66,19 +84,22 @@ impl OrderBook {
         }
     }
 
-    /// Creates a new, empty OrderBook instance with specified price range
-    pub fn new(max_price_tick: u64) -> Self {
+    /// Creates a new, empty OrderBook instance with specified price range and symbol
+    pub fn new(symbol: String, max_price_tick: u64) -> Self {
         OrderBook {
+            symbol,
             levels: vec![None; max_price_tick as usize + 1],
             ask_side: OrderbookSide {
                 best_tick: None,
                 worst_tick: None,
                 higher_is_better: false, // Lower prices are better for asks
+                active_levels: BTreeMap::new(),
             },
             bid_side: OrderbookSide {
                 best_tick: None,
                 worst_tick: None,
                 higher_is_better: true, // Higher prices are better for bids
+                active_levels: BTreeMap::new(),
             },
             max_price_tick,
             order_id_counter: 0,
@@ -300,6 +321,15 @@ impl OrderBook {
                     resting_order.quantity_filled += quantity_to_fill;
                     level.total_quantity -= quantity_to_fill;
 
+                    // Update active levels tracking for the opposite side
+                    let opposite_side = match order.side {
+                        OrderSide::Bid => &mut self.ask_side,
+                        OrderSide::Ask => &mut self.bid_side,
+                    };
+                    opposite_side
+                        .active_levels
+                        .insert(tick as u64, level.total_quantity);
+
                     if resting_order.quantity > resting_order.quantity_filled {
                         // If the resting order is only partially filled, push it back
                         level.orders.push_front(resting_order);
@@ -312,6 +342,12 @@ impl OrderBook {
                         // Set the level to None if it's empty before breaking
                         if level.total_quantity == 0 {
                             self.levels[tick as usize] = None;
+                            // Remove from active levels tracking for the opposite side
+                            let opposite_side = match order.side {
+                                OrderSide::Bid => &mut self.ask_side,
+                                OrderSide::Ask => &mut self.bid_side,
+                            };
+                            opposite_side.active_levels.remove(&(tick as u64));
                         }
                         break 'outer;
                     }
@@ -322,6 +358,12 @@ impl OrderBook {
             if let Some(level) = &self.levels[tick as usize] {
                 if level.total_quantity == 0 {
                     self.levels[tick as usize] = None;
+                    // Remove from active levels tracking for the opposite side
+                    let opposite_side = match order.side {
+                        OrderSide::Bid => &mut self.ask_side,
+                        OrderSide::Ask => &mut self.bid_side,
+                    };
+                    opposite_side.active_levels.remove(&(tick as u64));
                 }
             }
         }
@@ -491,9 +533,11 @@ impl OrderBook {
 
         level.orders.push_back(order.clone());
         level.total_quantity += order.quantity - order.quantity_filled;
+        let total_quantity = level.total_quantity;
 
-        // Update best and worst ticks for the appropriate side
+        // Update active levels tracking and best/worst ticks
         let side_mut = self.get_side_mut(order_side);
+        side_mut.active_levels.insert(price_tick, total_quantity);
         let higher_is_better = side_mut.higher_is_better;
 
         match side_mut.best_tick {
@@ -540,6 +584,11 @@ impl OrderBook {
         self.total_orders
     }
 
+    /// Get the symbol for this orderbook
+    pub fn symbol(&self) -> &str {
+        &self.symbol
+    }
+
     pub fn cancel_order(&mut self, order_id: u64, price_tick: u64, side: OrderSide) -> bool {
         if (price_tick as usize) >= self.levels.len() {
             return false;
@@ -576,6 +625,9 @@ impl OrderBook {
                         // If the level is now empty, set it to None and update ticks
                         if level.total_quantity == 0 {
                             self.levels[price_tick as usize] = None;
+                            // Remove from active levels tracking
+                            let side_mut = self.get_side_mut(side);
+                            side_mut.active_levels.remove(&price_tick);
                         }
                     }
                 }
@@ -590,6 +642,35 @@ impl OrderBook {
         }
         false
     }
+
+    /// Get orderbook depth up to the specified number of levels
+    /// Returns the top N levels for both bids and asks
+    pub fn get_depth(&self, levels: usize) -> OrderBookDepth {
+        let mut bids = Vec::new();
+        let mut asks = Vec::new();
+
+        // Get top N bid levels (highest prices first)
+        // BTreeMap iterates in ascending order, so we need to reverse for bids
+        let bid_iter = self.bid_side.active_levels.iter().rev().take(levels);
+        for (price_tick, quantity) in bid_iter {
+            bids.push(DepthLevel {
+                price_tick: *price_tick,
+                quantity: *quantity,
+            });
+        }
+
+        // Get top N ask levels (lowest prices first)
+        // BTreeMap iterates in ascending order, which is perfect for asks
+        let ask_iter = self.ask_side.active_levels.iter().take(levels);
+        for (price_tick, quantity) in ask_iter {
+            asks.push(DepthLevel {
+                price_tick: *price_tick,
+                quantity: *quantity,
+            });
+        }
+
+        OrderBookDepth { bids, asks }
+    }
 }
 
 #[cfg(test)]
@@ -598,7 +679,7 @@ mod tests {
     use crate::types::{OrderSide, TimeInForce};
 
     fn setup_book() -> OrderBook {
-        OrderBook::new(1000)
+        OrderBook::new("TEST-USD".to_string(), 1000)
     }
 
     #[test]
@@ -1193,5 +1274,128 @@ mod tests {
         assert_eq!(book.bid_side.best_tick, Some(103));
         let level = book.levels[103 as usize].as_ref().unwrap();
         assert_eq!(level.total_quantity, 3);
+    }
+
+    #[test]
+    fn test_get_depth_empty_book() {
+        let book = setup_book();
+        let depth = book.get_depth(10);
+
+        assert!(depth.bids.is_empty());
+        assert!(depth.asks.is_empty());
+    }
+
+    #[test]
+    fn test_get_depth_single_levels() {
+        let mut book = setup_book();
+
+        // Add one bid and one ask
+        book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(105, 5, OrderSide::Ask, TimeInForce::GTC);
+
+        let depth = book.get_depth(10);
+
+        assert_eq!(depth.bids.len(), 1);
+        assert_eq!(depth.bids[0].price_tick, 100);
+        assert_eq!(depth.bids[0].quantity, 10);
+
+        assert_eq!(depth.asks.len(), 1);
+        assert_eq!(depth.asks[0].price_tick, 105);
+        assert_eq!(depth.asks[0].quantity, 5);
+    }
+
+    #[test]
+    fn test_get_depth_multiple_levels() {
+        let mut book = setup_book();
+
+        // Add multiple bid levels (higher prices should come first)
+        book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(102, 5, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(98, 15, OrderSide::Bid, TimeInForce::GTC);
+
+        // Add multiple ask levels (lower prices should come first)
+        book.add_order(105, 8, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(108, 12, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(103, 3, OrderSide::Ask, TimeInForce::GTC);
+
+        let depth = book.get_depth(10);
+
+        // Bids should be sorted by price descending (highest first)
+        assert_eq!(depth.bids.len(), 3);
+        assert_eq!(depth.bids[0].price_tick, 102);
+        assert_eq!(depth.bids[0].quantity, 5);
+        assert_eq!(depth.bids[1].price_tick, 100);
+        assert_eq!(depth.bids[1].quantity, 10);
+        assert_eq!(depth.bids[2].price_tick, 98);
+        assert_eq!(depth.bids[2].quantity, 15);
+
+        // Asks should be sorted by price ascending (lowest first)
+        assert_eq!(depth.asks.len(), 3);
+        assert_eq!(depth.asks[0].price_tick, 103);
+        assert_eq!(depth.asks[0].quantity, 3);
+        assert_eq!(depth.asks[1].price_tick, 105);
+        assert_eq!(depth.asks[1].quantity, 8);
+        assert_eq!(depth.asks[2].price_tick, 108);
+        assert_eq!(depth.asks[2].quantity, 12);
+    }
+
+    #[test]
+    fn test_get_depth_limit_levels() {
+        let mut book = setup_book();
+
+        // Add 5 bid levels
+        for i in 0..5 {
+            book.add_order(100 + i, 10, OrderSide::Bid, TimeInForce::GTC);
+        }
+
+        // Add 5 ask levels
+        for i in 0..5 {
+            book.add_order(110 + i, 10, OrderSide::Ask, TimeInForce::GTC);
+        }
+
+        // Request only 3 levels
+        let depth = book.get_depth(3);
+
+        assert_eq!(depth.bids.len(), 3);
+        assert_eq!(depth.asks.len(), 3);
+
+        // Should get the best 3 levels
+        assert_eq!(depth.bids[0].price_tick, 104); // Highest bid
+        assert_eq!(depth.bids[1].price_tick, 103);
+        assert_eq!(depth.bids[2].price_tick, 102);
+
+        assert_eq!(depth.asks[0].price_tick, 110); // Lowest ask
+        assert_eq!(depth.asks[1].price_tick, 111);
+        assert_eq!(depth.asks[2].price_tick, 112);
+    }
+
+    #[test]
+    fn test_get_depth_after_matching() {
+        let mut book = setup_book();
+
+        // Add orders
+        book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(102, 5, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(105, 8, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(108, 12, OrderSide::Ask, TimeInForce::GTC);
+
+        // Match some orders - this should consume the bid at 102 and partially consume ask at 105
+        book.add_order(105, 3, OrderSide::Bid, TimeInForce::GTC);
+
+        let depth = book.get_depth(10);
+
+        // After matching: both bids should remain (102 and 100)
+        assert_eq!(depth.bids.len(), 2);
+        assert_eq!(depth.bids[0].price_tick, 102);
+        assert_eq!(depth.bids[0].quantity, 5);
+        assert_eq!(depth.bids[1].price_tick, 100);
+        assert_eq!(depth.bids[1].quantity, 10);
+
+        // Ask at 105 should be partially consumed (8 - 3 = 5), ask at 108 should remain
+        assert_eq!(depth.asks.len(), 2);
+        assert_eq!(depth.asks[0].price_tick, 105);
+        assert_eq!(depth.asks[0].quantity, 5); // 8 - 3 = 5
+        assert_eq!(depth.asks[1].price_tick, 108);
+        assert_eq!(depth.asks[1].quantity, 12);
     }
 }

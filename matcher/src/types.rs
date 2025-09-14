@@ -1,10 +1,14 @@
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum OrderSide {
     Bid,
     Ask,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
 pub enum TimeInForce {
     /// Good Till Canceled - remains active until filled or explicitly canceled
     GTC,
@@ -36,3 +40,6 @@ pub struct Trade {
     pub price_tick: u64,
     pub timestamp: u64,
 }
+
+// Re-export depth types from orderbook module
+pub use crate::orderbook::{DepthLevel, OrderBookDepth};
