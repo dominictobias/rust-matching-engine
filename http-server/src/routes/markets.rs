@@ -1,4 +1,5 @@
-use axum::{Json, response::Json as ResponseJson};
+use crate::AppState;
+use axum::{Json, extract::State, response::Json as ResponseJson};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,7 +13,9 @@ pub struct MarketAsset {
     pub tick_multiplier: u64,
 }
 
-pub async fn get_markets() -> ResponseJson<Vec<MarketAsset>> {
+pub async fn get_markets(State(state): State<AppState>) -> ResponseJson<Vec<MarketAsset>> {
+    let order_books = state.order_books.lock().unwrap();
+
     let markets = vec![
         MarketAsset {
             id: "BTCUSD".to_string(),
@@ -22,7 +25,10 @@ pub async fn get_markets() -> ResponseJson<Vec<MarketAsset>> {
                 .to_string(),
             price: 115_771.03,
             change24h: 2.5,
-            tick_multiplier: 100, // 2 decimal places
+            tick_multiplier: order_books
+                .get("BTC-USD")
+                .map(|ob| ob.tick_multiplier())
+                .unwrap_or(100),
         },
         MarketAsset {
             id: "SOLUSD".to_string(),
@@ -31,7 +37,10 @@ pub async fn get_markets() -> ResponseJson<Vec<MarketAsset>> {
             icon: "https://solana.com/src/img/branding/solanaLogoMark.svg".to_string(),
             price: 246.64,
             change24h: -1.2,
-            tick_multiplier: 100, // 2 decimal places
+            tick_multiplier: order_books
+                .get("SOL-USD")
+                .map(|ob| ob.tick_multiplier())
+                .unwrap_or(100),
         },
     ];
 

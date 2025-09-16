@@ -21,7 +21,7 @@ fn test_sustained_add_orders() {
 
     let duration = Duration::from_secs(10);
     let start = Instant::now();
-    let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+    let mut book = OrderBook::new("TEST-USD".to_string(), 100);
     let mut operations = 0;
 
     while start.elapsed() < duration {
@@ -51,7 +51,7 @@ fn test_mixed_workload() {
 
     let duration = Duration::from_secs(10);
     let start = Instant::now();
-    let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+    let mut book = OrderBook::new("TEST-USD".to_string(), 100);
     let mut order_ids = Vec::new();
 
     // Pre-populate with some orders and track their IDs
@@ -131,7 +131,6 @@ fn test_concurrent_access() {
 
     let book = Arc::new(std::sync::Mutex::new(OrderBook::new(
         "TEST-USD".to_string(),
-        100_000,
         100,
     )));
     let operations = Arc::new(AtomicU64::new(0));
@@ -189,7 +188,7 @@ fn test_concurrent_access() {
 fn test_memory_usage() {
     println!("💾 Testing memory usage under load...");
 
-    let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+    let mut book = OrderBook::new("TEST-USD".to_string(), 100);
     let start = Instant::now();
 
     // Add a large number of orders

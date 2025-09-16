@@ -29,22 +29,18 @@ pub struct OrderbookSide {
     pub worst_tick: Option<u64>,
     /// true if higher prices are better (for bids), false if lower prices are better (for asks)
     pub higher_is_better: bool,
-    /// Efficient tracking of active price levels (price -> quantity)
-    /// BTreeMap automatically keeps prices sorted
-    pub active_levels: BTreeMap<u64, u64>,
+    /// Price levels stored in a BTreeMap for efficient ordered access
+    pub levels: BTreeMap<u64, PriceLevel>,
 }
 
 pub struct OrderBook {
     symbol: String,
-    levels: Vec<Option<PriceLevel>>,
 
     /// Ask side of the orderbook (lower prices are better)
     ask_side: OrderbookSide,
     /// Bid side of the orderbook (higher prices are better)
     bid_side: OrderbookSide,
 
-    /// Maximum price tick we support (determines Vec size)
-    max_price_tick: u64,
     /// Multiplier to convert decimal prices to integer ticks
     tick_multiplier: u64,
 
@@ -62,14 +58,6 @@ fn get_current_timestamp() -> u64 {
 }
 
 impl OrderBook {
-    /// Gets a reference to the appropriate side based on OrderSide
-    fn get_side(&self, side: OrderSide) -> &OrderbookSide {
-        match side {
-            OrderSide::Bid => &self.bid_side,
-            OrderSide::Ask => &self.ask_side,
-        }
-    }
-
     /// Gets a mutable reference to the appropriate side based on OrderSide
     fn get_side_mut(&mut self, side: OrderSide) -> &mut OrderbookSide {
         match side {
@@ -86,24 +74,22 @@ impl OrderBook {
         }
     }
 
-    /// Creates a new, empty OrderBook instance with specified price range and symbol
-    pub fn new(symbol: String, max_price_tick: u64, tick_multiplier: u64) -> Self {
+    /// Creates a new, empty OrderBook instance with specified symbol and tick multiplier
+    pub fn new(symbol: String, tick_multiplier: u64) -> Self {
         OrderBook {
             symbol,
-            levels: vec![None; max_price_tick as usize + 1],
             ask_side: OrderbookSide {
                 best_tick: None,
                 worst_tick: None,
                 higher_is_better: false, // Lower prices are better for asks
-                active_levels: BTreeMap::new(),
+                levels: BTreeMap::new(),
             },
             bid_side: OrderbookSide {
                 best_tick: None,
                 worst_tick: None,
                 higher_is_better: true, // Higher prices are better for bids
-                active_levels: BTreeMap::new(),
+                levels: BTreeMap::new(),
             },
-            max_price_tick,
             tick_multiplier,
             order_id_counter: 0,
             trade_id_counter: 0,
@@ -119,11 +105,6 @@ impl OrderBook {
         side: OrderSide,
         time_in_force: TimeInForce,
     ) -> (Option<Order>, Vec<Trade>) {
-        // Check if price tick is within bounds (except for market orders)
-        if price_tick > 0 && price_tick > self.max_price_tick {
-            return (None, Vec::new());
-        }
-
         let order_id = self.order_id_counter;
         self.order_id_counter += 1;
         let timestamp = get_current_timestamp();
@@ -200,8 +181,8 @@ impl OrderBook {
         (Some(order), trades)
     }
 
-    // Assume it's being called when we have a price
-    fn get_tick_iter_bounds(&self, order: &Order) -> (usize, usize) {
+    // Returns the price range to iterate over for matching
+    fn get_tick_iter_bounds(&self, order: &Order) -> (u64, u64) {
         let opposite_side = match order.side {
             OrderSide::Bid => &self.ask_side,
             OrderSide::Ask => &self.bid_side,
@@ -219,7 +200,7 @@ impl OrderBook {
                 OrderSide::Bid => {
                     // For market buy orders, match against all available ask liquidity
                     // We want to iterate from best_ask up to worst_ask
-                    self.ask_side.worst_tick.unwrap_or(self.max_price_tick)
+                    self.ask_side.worst_tick.unwrap_or(u64::MAX)
                 }
             },
             _ => order.price_tick,
@@ -244,7 +225,7 @@ impl OrderBook {
             }
         }
 
-        (start_tick as usize, end_tick as usize)
+        (start_tick, end_tick)
     }
 
     fn can_fill_fok(&self, order: &Order) -> bool {
@@ -259,13 +240,32 @@ impl OrderBook {
 
         let mut qty_till_price: u64 = 0;
 
-        for tick in start_tick..=end_tick {
-            let level_option = &self.levels[tick as usize];
-            if let Some(level) = level_option {
-                qty_till_price += level.total_quantity;
+        // Get the opposite side's levels
+        let opposite_side = match order.side {
+            OrderSide::Bid => &self.ask_side,
+            OrderSide::Ask => &self.bid_side,
+        };
+
+        // Iterate over the price range in the appropriate direction
+        if start_tick <= end_tick {
+            // Ascending order (for asks matching against bids)
+            for tick in start_tick..=end_tick {
+                if let Some(level) = opposite_side.levels.get(&tick) {
+                    qty_till_price += level.total_quantity;
+                }
+                if qty_till_price >= order.quantity {
+                    return true;
+                }
             }
-            if qty_till_price >= order.quantity {
-                return true;
+        } else {
+            // Descending order (for bids matching against asks)
+            for tick in (end_tick..=start_tick).rev() {
+                if let Some(level) = opposite_side.levels.get(&tick) {
+                    qty_till_price += level.total_quantity;
+                }
+                if qty_till_price >= order.quantity {
+                    return true;
+                }
             }
         }
 
@@ -281,6 +281,12 @@ impl OrderBook {
         if start_tick == 0 && end_tick == 0 {
             return trades;
         }
+
+        // Get the opposite side's levels
+        let opposite_side = match order.side {
+            OrderSide::Bid => &mut self.ask_side,
+            OrderSide::Ask => &mut self.bid_side,
+        };
 
         // For market orders, we need to handle the iteration direction correctly
         let tick_range = if order.price_tick == 0 && order.side == OrderSide::Ask {
@@ -299,9 +305,7 @@ impl OrderBook {
         };
 
         'outer: for tick in tick_range {
-            let level_option = &mut self.levels[tick as usize];
-
-            if let Some(level) = level_option {
+            if let Some(level) = opposite_side.levels.get_mut(&tick) {
                 while let Some(mut resting_order) = level.orders.pop_front() {
                     if resting_order.is_cancelled {
                         // Do nothing, effectively dropping the order
@@ -332,15 +336,6 @@ impl OrderBook {
                     resting_order.quantity_filled += quantity_to_fill;
                     level.total_quantity -= quantity_to_fill;
 
-                    // Update active levels tracking for the opposite side
-                    let opposite_side = match order.side {
-                        OrderSide::Bid => &mut self.ask_side,
-                        OrderSide::Ask => &mut self.bid_side,
-                    };
-                    opposite_side
-                        .active_levels
-                        .insert(tick as u64, level.total_quantity);
-
                     if resting_order.quantity > resting_order.quantity_filled {
                         // If the resting order is only partially filled, push it back
                         level.orders.push_front(resting_order);
@@ -350,31 +345,19 @@ impl OrderBook {
 
                     // The order is fully filled, we can exit
                     if order.quantity == order.quantity_filled {
-                        // Set the level to None if it's empty before breaking
+                        // Remove the level if it's empty before breaking
                         if level.total_quantity == 0 {
-                            self.levels[tick as usize] = None;
-                            // Remove from active levels tracking for the opposite side
-                            let opposite_side = match order.side {
-                                OrderSide::Bid => &mut self.ask_side,
-                                OrderSide::Ask => &mut self.bid_side,
-                            };
-                            opposite_side.active_levels.remove(&(tick as u64));
+                            opposite_side.levels.remove(&tick);
                         }
                         break 'outer;
                     }
                 }
             }
 
-            // Set the level to None if it's empty (after processing all orders in the level)
-            if let Some(level) = &self.levels[tick as usize] {
+            // Remove the level if it's empty (after processing all orders in the level)
+            if let Some(level) = opposite_side.levels.get(&tick) {
                 if level.total_quantity == 0 {
-                    self.levels[tick as usize] = None;
-                    // Remove from active levels tracking for the opposite side
-                    let opposite_side = match order.side {
-                        OrderSide::Bid => &mut self.ask_side,
-                        OrderSide::Ask => &mut self.bid_side,
-                    };
-                    opposite_side.active_levels.remove(&(tick as u64));
+                    opposite_side.levels.remove(&tick);
                 }
             }
         }
@@ -402,189 +385,52 @@ impl OrderBook {
 
     /// Updates ticks for a given side after potential level consumption
     fn update_side_ticks(&mut self, side: OrderSide) {
-        // First, get all the values we need without holding any mutable references
-        let (current_best, current_worst, higher_is_better) = {
-            let side_ref = self.get_side(side);
-            (
-                side_ref.best_tick,
-                side_ref.worst_tick,
-                side_ref.higher_is_better,
-            )
-        };
+        let side_mut = self.get_side_mut(side);
 
-        // If we don't have any ticks, nothing to update
-        if current_best.is_none() || current_worst.is_none() {
+        // If we don't have any levels, clear the ticks
+        if side_mut.levels.is_empty() {
+            side_mut.best_tick = None;
+            side_mut.worst_tick = None;
             return;
         }
 
-        let best_tick = current_best.unwrap();
-        let worst_tick = current_worst.unwrap();
-
-        // Check if best tick was consumed
-        let best_consumed = self.levels[best_tick as usize].is_none();
-
-        // Check if worst tick was consumed
-        let worst_consumed = self.levels[worst_tick as usize].is_none();
-
-        if best_consumed && worst_consumed {
-            // Both consumed - find new range
-            let (new_best, new_worst) = self.find_new_tick_range(side, higher_is_better);
-            let side_mut = self.get_side_mut(side);
-            side_mut.best_tick = new_best;
-            side_mut.worst_tick = new_worst;
-        } else if best_consumed {
-            // Only best consumed - find new best
-            let new_best = self.find_new_best_tick(side, worst_tick, higher_is_better);
-            let side_mut = self.get_side_mut(side);
-            side_mut.best_tick = new_best;
-        } else if worst_consumed {
-            // Only worst consumed - find new worst
-            let new_worst = self.find_new_worst_tick(side, best_tick, higher_is_better);
-            let side_mut = self.get_side_mut(side);
-            side_mut.worst_tick = new_worst;
-        }
-        // If neither consumed, no update needed
-    }
-
-    /// Finds new best and worst ticks when both are consumed
-    fn find_new_tick_range(
-        &self,
-        _side: OrderSide,
-        higher_is_better: bool,
-    ) -> (Option<u64>, Option<u64>) {
-        let mut best_tick = None;
-        let mut worst_tick = None;
-
-        if higher_is_better {
-            // For bids: find lowest and highest prices with orders
-            for tick in 0..=self.max_price_tick {
-                if self.levels[tick as usize].is_some() {
-                    if best_tick.is_none() {
-                        worst_tick = Some(tick); // First found is worst (lowest)
-                    }
-                    best_tick = Some(tick); // Last found is best (highest)
-                }
-            }
+        // Update best and worst ticks from the BTreeMap
+        if side_mut.higher_is_better {
+            // For bids: best is highest price, worst is lowest price
+            side_mut.best_tick = side_mut.levels.last_key_value().map(|(&k, _)| k);
+            side_mut.worst_tick = side_mut.levels.first_key_value().map(|(&k, _)| k);
         } else {
-            // For asks: find highest and lowest prices with orders
-            for tick in (0..=self.max_price_tick).rev() {
-                if self.levels[tick as usize].is_some() {
-                    if best_tick.is_none() {
-                        worst_tick = Some(tick); // First found is worst (highest)
-                    }
-                    best_tick = Some(tick); // Last found is best (lowest)
-                }
-            }
+            // For asks: best is lowest price, worst is highest price
+            side_mut.best_tick = side_mut.levels.first_key_value().map(|(&k, _)| k);
+            side_mut.worst_tick = side_mut.levels.last_key_value().map(|(&k, _)| k);
         }
-
-        (best_tick, worst_tick)
-    }
-
-    /// Finds new best tick when only best is consumed
-    fn find_new_best_tick(
-        &self,
-        _side: OrderSide,
-        current_worst: u64,
-        higher_is_better: bool,
-    ) -> Option<u64> {
-        if higher_is_better {
-            // For bids: find highest price between current worst and max_price_tick
-            for tick in (current_worst..=self.max_price_tick).rev() {
-                if self.levels[tick as usize].is_some() {
-                    return Some(tick);
-                }
-            }
-        } else {
-            // For asks: find lowest price between 0 and current worst
-            for tick in 0..=current_worst {
-                if self.levels[tick as usize].is_some() {
-                    return Some(tick);
-                }
-            }
-        }
-        None
-    }
-
-    /// Finds new worst tick when only worst is consumed
-    fn find_new_worst_tick(
-        &self,
-        _side: OrderSide,
-        current_best: u64,
-        higher_is_better: bool,
-    ) -> Option<u64> {
-        if higher_is_better {
-            // For bids: find lowest price between best and current worst
-            for tick in 0..=current_best {
-                if self.levels[tick as usize].is_some() {
-                    return Some(tick);
-                }
-            }
-        } else {
-            // For asks: find highest price between best and current worst
-            for tick in (current_best..=self.max_price_tick).rev() {
-                if self.levels[tick as usize].is_some() {
-                    return Some(tick);
-                }
-            }
-        }
-        None
     }
 
     fn add_limit_order(&mut self, order: Order) {
         let price_tick = order.price_tick;
         let order_side = order.side;
 
-        if (price_tick as usize) >= self.levels.len() {
-            return;
-        }
-        let level = self.levels[price_tick as usize].get_or_insert_with(|| PriceLevel {
-            orders: VecDeque::new(),
-            total_quantity: 0,
-        });
+        let side_mut = self.get_side_mut(order_side);
+        let level = side_mut
+            .levels
+            .entry(price_tick)
+            .or_insert_with(|| PriceLevel {
+                orders: VecDeque::new(),
+                total_quantity: 0,
+            });
 
         level.orders.push_back(order.clone());
         level.total_quantity += order.quantity - order.quantity_filled;
-        let total_quantity = level.total_quantity;
 
-        // Update active levels tracking and best/worst ticks
-        let side_mut = self.get_side_mut(order_side);
-        side_mut.active_levels.insert(price_tick, total_quantity);
-        let higher_is_better = side_mut.higher_is_better;
-
-        match side_mut.best_tick {
-            None => {
-                // First order on this side
-                side_mut.best_tick = Some(price_tick);
-                side_mut.worst_tick = Some(price_tick);
-            }
-            Some(current_best) => {
-                // Check if this is a better price
-                let is_better = if higher_is_better {
-                    price_tick > current_best
-                } else {
-                    price_tick < current_best
-                };
-
-                if is_better {
-                    side_mut.best_tick = Some(price_tick);
-                }
-
-                // Update worst tick if this is a worse price
-                match side_mut.worst_tick {
-                    None => side_mut.worst_tick = Some(price_tick),
-                    Some(current_worst) => {
-                        let is_worse = if higher_is_better {
-                            price_tick < current_worst
-                        } else {
-                            price_tick > current_worst
-                        };
-
-                        if is_worse {
-                            side_mut.worst_tick = Some(price_tick);
-                        }
-                    }
-                }
-            }
+        // Update best/worst ticks based on BTreeMap keys
+        if side_mut.higher_is_better {
+            // For bids: best is highest price, worst is lowest price
+            side_mut.best_tick = side_mut.levels.keys().max().copied();
+            side_mut.worst_tick = side_mut.levels.keys().min().copied();
+        } else {
+            // For asks: best is lowest price, worst is highest price
+            side_mut.best_tick = side_mut.levels.keys().min().copied();
+            side_mut.worst_tick = side_mut.levels.keys().max().copied();
         }
 
         self.total_orders += 1;
@@ -605,26 +451,43 @@ impl OrderBook {
         self.tick_multiplier
     }
 
+    /// Get the best bid price tick
+    pub fn best_bid_tick(&self) -> Option<u64> {
+        self.bid_side.best_tick
+    }
+
+    /// Get the best ask price tick
+    pub fn best_ask_tick(&self) -> Option<u64> {
+        self.ask_side.best_tick
+    }
+
     /// Get an order by its ID
     pub fn get_order_by_id(&self, order_id: u64) -> Option<&Order> {
-        for level in &self.levels {
-            if let Some(level) = level {
-                for order in &level.orders {
-                    if order.id == order_id {
-                        return Some(order);
-                    }
+        // Search in bid side levels
+        for level in self.bid_side.levels.values() {
+            for order in &level.orders {
+                if order.id == order_id {
+                    return Some(order);
                 }
             }
         }
+
+        // Search in ask side levels
+        for level in self.ask_side.levels.values() {
+            for order in &level.orders {
+                if order.id == order_id {
+                    return Some(order);
+                }
+            }
+        }
+
         None
     }
 
     pub fn cancel_order(&mut self, order_id: u64, price_tick: u64, side: OrderSide) -> bool {
-        if (price_tick as usize) >= self.levels.len() {
-            return false;
-        }
+        let side_mut = self.get_side_mut(side);
 
-        if let Some(level) = &mut self.levels[price_tick as usize] {
+        if let Some(level) = side_mut.levels.get_mut(&price_tick) {
             if let Ok(index) = level.orders.binary_search_by_key(&order_id, |o| o.id) {
                 // Check if the side matches
                 let order = &level.orders[index];
@@ -650,16 +513,17 @@ impl OrderBook {
                         order.is_cancelled = true;
                         level.total_quantity -= order.quantity - order.quantity_filled;
                         cancelled = true;
-                        self.total_orders -= 1;
 
-                        // If the level is now empty, set it to None and update ticks
+                        // If the level is now empty, remove it from the BTreeMap
                         if level.total_quantity == 0 {
-                            self.levels[price_tick as usize] = None;
-                            // Remove from active levels tracking
-                            let side_mut = self.get_side_mut(side);
-                            side_mut.active_levels.remove(&price_tick);
+                            side_mut.levels.remove(&price_tick);
                         }
                     }
+                }
+
+                // Decrement total orders after releasing the borrow
+                if cancelled {
+                    self.total_orders -= 1;
                 }
 
                 // Update ticks if needed after the level was consumed
@@ -681,21 +545,21 @@ impl OrderBook {
 
         // Get top N bid levels (highest prices first)
         // BTreeMap iterates in ascending order, so we need to reverse for bids
-        let bid_iter = self.bid_side.active_levels.iter().rev().take(levels);
-        for (price_tick, quantity) in bid_iter {
+        let bid_iter = self.bid_side.levels.iter().rev().take(levels);
+        for (price_tick, level) in bid_iter {
             bids.push(DepthLevel {
                 price_tick: *price_tick,
-                quantity: *quantity,
+                quantity: level.total_quantity,
             });
         }
 
         // Get top N ask levels (lowest prices first)
         // BTreeMap iterates in ascending order, which is perfect for asks
-        let ask_iter = self.ask_side.active_levels.iter().take(levels);
-        for (price_tick, quantity) in ask_iter {
+        let ask_iter = self.ask_side.levels.iter().take(levels);
+        for (price_tick, level) in ask_iter {
             asks.push(DepthLevel {
                 price_tick: *price_tick,
-                quantity: *quantity,
+                quantity: level.total_quantity,
             });
         }
 
@@ -709,7 +573,7 @@ mod tests {
     use crate::types::{OrderSide, TimeInForce};
 
     fn setup_book() -> OrderBook {
-        OrderBook::new("TEST-USD".to_string(), 1000, 100) // 100 = 2 decimal places
+        OrderBook::new("TEST-USD".to_string(), 100) // 100 = 2 decimal places
     }
 
     #[test]
@@ -722,7 +586,6 @@ mod tests {
         assert_eq!(book.total_orders, 0);
         assert_eq!(book.order_id_counter, 0);
         assert_eq!(book.trade_id_counter, 0);
-        assert_eq!(book.max_price_tick, 1000);
         assert_eq!(book.tick_multiplier, 100);
     }
 
@@ -746,7 +609,7 @@ mod tests {
         assert_eq!(book.bid_side.best_tick, Some(price_tick));
         assert_eq!(book.bid_side.worst_tick, Some(price_tick));
         assert!(book.ask_side.best_tick.is_none());
-        let level = book.levels[price_tick as usize].as_ref().unwrap();
+        let level = book.bid_side.levels.get(&price_tick).unwrap();
         assert_eq!(level.total_quantity, quantity);
         assert_eq!(level.orders.len(), 1);
         assert_eq!(book.total_orders, 1);
@@ -759,7 +622,7 @@ mod tests {
         assert!(trades.is_empty());
         assert_eq!(book.ask_side.best_tick, Some(sell_price_tick));
         assert_eq!(book.ask_side.worst_tick, Some(sell_price_tick));
-        let ask_level = book.levels[sell_price_tick as usize].as_ref().unwrap();
+        let ask_level = book.ask_side.levels.get(&sell_price_tick).unwrap();
         assert_eq!(ask_level.total_quantity, 5);
         assert_eq!(book.total_orders, 2);
     }
@@ -785,7 +648,7 @@ mod tests {
         assert_eq!(trade.taker_order_id, buy_order.id);
 
         // Check the state of the resting order
-        let ask_level = book.levels[101 as usize].as_ref().unwrap();
+        let ask_level = book.ask_side.levels.get(&101).unwrap();
         assert_eq!(ask_level.total_quantity, 5);
         assert_eq!(ask_level.orders[0].quantity_filled, 5);
     }
@@ -811,7 +674,7 @@ mod tests {
 
         // Best ask should be gone, next best ask is now the best
         assert_eq!(book.ask_side.best_tick, Some(102));
-        let level = book.levels[102 as usize].as_ref().unwrap();
+        let level = book.ask_side.levels.get(&102).unwrap();
         assert_eq!(level.total_quantity, 5);
     }
 
@@ -825,7 +688,7 @@ mod tests {
         assert!(cancelled);
 
         // After cancelling the only order in the level, the level should be None
-        assert!(book.levels[101 as usize].is_none());
+        assert!(book.bid_side.levels.get(&101).is_none());
 
         // Try to cancel again
         let cancelled_again = book.cancel_order(order_id, 101, OrderSide::Bid);
@@ -846,7 +709,7 @@ mod tests {
         assert_eq!(trades[0].quantity, 5);
 
         // The resting order should be gone
-        assert!(book.levels[101 as usize].is_none());
+        assert!(book.ask_side.levels.get(&101).is_none());
         assert!(book.ask_side.best_tick.is_none());
         assert_eq!(book.total_orders, 0);
     }
@@ -881,7 +744,7 @@ mod tests {
         assert!(trades.is_empty());
 
         // Book should be unchanged
-        let level = book.levels[101 as usize].as_ref().unwrap();
+        let level = book.ask_side.levels.get(&101).unwrap();
         assert_eq!(level.total_quantity, 5);
         assert_eq!(book.total_orders, 1);
     }
@@ -904,7 +767,7 @@ mod tests {
         assert_eq!(book.bid_side.best_tick, Some(100));
 
         // After cancelling the only order in the level, the level should be None
-        assert!(book.levels[101 as usize].is_none());
+        assert!(book.bid_side.levels.get(&101).is_none());
     }
 
     #[test]
@@ -961,7 +824,7 @@ mod tests {
 
         // Best tick should remain the same since level still has quantity
         assert_eq!(book.ask_side.best_tick, Some(102));
-        let level = book.levels[102 as usize].as_ref().unwrap();
+        let level = book.ask_side.levels.get(&102).unwrap();
         assert_eq!(level.total_quantity, 5);
 
         // Final market buy that fully consumes the 102 level
@@ -1019,7 +882,7 @@ mod tests {
         book.add_order(1, 102, 20, OrderSide::Ask, TimeInForce::GTC);
 
         assert_eq!(book.ask_side.best_tick, Some(101));
-        let level = book.levels[101 as usize].as_ref().unwrap();
+        let level = book.ask_side.levels.get(&101).unwrap();
         assert_eq!(level.total_quantity, 10);
         assert_eq!(level.orders.len(), 3);
 
@@ -1043,10 +906,10 @@ mod tests {
         assert_eq!(book.ask_side.best_tick, Some(102));
 
         // Verify the 101 level is cleared
-        assert!(book.levels[101 as usize].is_none());
+        assert!(book.ask_side.levels.get(&101).is_none());
 
         // Verify remaining quantity at 102
-        let level = book.levels[102 as usize].as_ref().unwrap();
+        let level = book.ask_side.levels.get(&102).unwrap();
         assert_eq!(level.total_quantity, 15);
     }
 
@@ -1109,7 +972,7 @@ mod tests {
         book.add_order(1, 100, 3, OrderSide::Bid, TimeInForce::GTC);
         book.add_order(1, 100, 2, OrderSide::Bid, TimeInForce::GTC);
 
-        let level = book.levels[100 as usize].as_ref().unwrap();
+        let level = book.bid_side.levels.get(&100).unwrap();
         assert_eq!(level.total_quantity, 10);
         assert_eq!(level.orders.len(), 3);
         assert_eq!(book.total_orders, 3);
@@ -1137,7 +1000,7 @@ mod tests {
         assert!(!cancelled);
 
         // Order should still exist
-        let level = book.levels[100 as usize].as_ref().unwrap();
+        let level = book.bid_side.levels.get(&100).unwrap();
         assert_eq!(level.total_quantity, 10);
     }
 
@@ -1154,7 +1017,7 @@ mod tests {
         assert!(!cancelled);
 
         // Order should still exist
-        let level = book.levels[100 as usize].as_ref().unwrap();
+        let level = book.bid_side.levels.get(&100).unwrap();
         assert_eq!(level.total_quantity, 10);
     }
 
@@ -1217,26 +1080,12 @@ mod tests {
 
         // Cancel the worst tick (the first order at 98)
         // We need to get the order ID of the first order at 98
-        let level = book.levels[98 as usize].as_ref().unwrap();
+        let level = book.bid_side.levels.get(&98).unwrap();
         let order_id = level.orders[0].id;
         book.cancel_order(order_id, 98, OrderSide::Bid);
 
         assert_eq!(book.bid_side.best_tick, Some(102));
         assert_eq!(book.bid_side.worst_tick, Some(100)); // Should update to next worst
-    }
-
-    #[test]
-    fn test_price_tick_bounds() {
-        let mut book = setup_book();
-
-        // Try to add order beyond max price tick
-        let (order, trades) = book.add_order(1, 1001, 10, OrderSide::Bid, TimeInForce::GTC);
-        assert!(order.is_none());
-        assert!(trades.is_empty());
-
-        // Try to cancel order beyond max price tick
-        let cancelled = book.cancel_order(0, 1001, OrderSide::Bid);
-        assert!(!cancelled);
     }
 
     #[test]
@@ -1263,7 +1112,7 @@ mod tests {
         assert_eq!(trades[0].quantity, 30);
 
         // Check resting order state
-        let level = book.levels[100 as usize].as_ref().unwrap();
+        let level = book.ask_side.levels.get(&100).unwrap();
         assert_eq!(level.total_quantity, 70);
         assert_eq!(level.orders[0].quantity_filled, 30);
     }
@@ -1283,7 +1132,7 @@ mod tests {
         assert_eq!(trades[0].price_tick, 100); // Should match at ask price
 
         // Ask should be partially filled (10 - 5 = 5 remaining)
-        let level = book.levels[100 as usize].as_ref().unwrap();
+        let level = book.ask_side.levels.get(&100).unwrap();
         assert_eq!(level.total_quantity, 5);
 
         // The bid at 102 should be fully filled and not in the book
@@ -1298,12 +1147,12 @@ mod tests {
         assert_eq!(trades[0].price_tick, 100); // Should match at ask price
 
         // Ask should be fully consumed
-        assert!(book.levels[100 as usize].is_none());
+        assert!(book.ask_side.levels.get(&100).is_none());
         assert_eq!(book.ask_side.best_tick, None);
 
         // The new bid at 103 should remain in the book with 3 units (8 - 5 = 3)
         assert_eq!(book.bid_side.best_tick, Some(103));
-        let level = book.levels[103 as usize].as_ref().unwrap();
+        let level = book.bid_side.levels.get(&103).unwrap();
         assert_eq!(level.total_quantity, 3);
     }
 
@@ -1455,12 +1304,12 @@ mod tests {
         assert_eq!(trade.maker_order_id, 0); // First bid order
 
         // The bid should be partially filled (2 - 1 = 1 remaining)
-        let bid_level = book.levels[102 as usize].as_ref().unwrap();
+        let bid_level = book.bid_side.levels.get(&102).unwrap();
         assert_eq!(bid_level.total_quantity, 1);
         assert_eq!(bid_level.orders[0].quantity_filled, 1);
 
         // The ask should not be in the book since it was fully filled
-        assert!(book.levels[101 as usize].is_none());
+        assert!(book.ask_side.levels.get(&101).is_none());
         assert_eq!(book.ask_side.best_tick, None);
     }
 }

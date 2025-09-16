@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{AppState, middleware::AuthUser};
 
+// Maximum allowed distance from best price as percentage (e.g., 20 = 20%)
+const MAX_ORDER_DISTANCE_PC: u64 = 20;
+
 // Add order request
 #[derive(Deserialize)]
 pub struct AddOrderRequest {
@@ -150,11 +153,15 @@ pub async fn add_order(
         );
     }
 
-    // Get the appropriate order book for the symbol first to get tick_multiplier
-    let tick_multiplier = {
+    // Get order book data for tick_multiplier and best prices
+    let (tick_multiplier, best_bid_tick, best_ask_tick) = {
         let order_books = state.order_books.lock().unwrap();
         match order_books.get(&payload.symbol) {
-            Some(book) => book.tick_multiplier(),
+            Some(book) => (
+                book.tick_multiplier(),
+                book.best_bid_tick(),
+                book.best_ask_tick(),
+            ),
             None => {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -168,6 +175,58 @@ pub async fn add_order(
             }
         }
     };
+
+    // Validate price distance from best prices
+    match payload.side {
+        OrderSide::Bid => {
+            if let Some(best_bid) = best_bid_tick {
+                // For bids, check if the order price is not too far below the best bid
+                let price_diff_pc = if best_bid > payload.price_tick {
+                    ((best_bid - payload.price_tick) * 100) / best_bid
+                } else {
+                    0
+                };
+                if price_diff_pc > MAX_ORDER_DISTANCE_PC {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(AddOrderResponse {
+                            order: None,
+                            trades: Vec::new(),
+                            success: false,
+                            message: format!(
+                                "Bid price too far from best bid. Distance: {}%, max allowed: {}%",
+                                price_diff_pc, MAX_ORDER_DISTANCE_PC
+                            ),
+                        }),
+                    );
+                }
+            }
+        }
+        OrderSide::Ask => {
+            if let Some(best_ask) = best_ask_tick {
+                // For asks, check if the order price is not too far above the best ask
+                let price_diff_pc = if payload.price_tick > best_ask {
+                    ((payload.price_tick - best_ask) * 100) / best_ask
+                } else {
+                    0
+                };
+                if price_diff_pc > MAX_ORDER_DISTANCE_PC {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(AddOrderResponse {
+                            order: None,
+                            trades: Vec::new(),
+                            success: false,
+                            message: format!(
+                                "Ask price too far from best ask. Distance: {}%, max allowed: {}%",
+                                price_diff_pc, MAX_ORDER_DISTANCE_PC
+                            ),
+                        }),
+                    );
+                }
+            }
+        }
+    }
 
     // Debit funds before placing order
     if let Err(error_msg) = state.storage.debit_funds_for_order(

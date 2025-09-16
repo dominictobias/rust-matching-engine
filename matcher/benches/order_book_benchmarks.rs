@@ -7,7 +7,7 @@ use std::hint::black_box;
 fn bench_add_limit_orders(c: &mut Criterion) {
     c.bench_function("add_limit_order", |b| {
         b.iter_with_setup(
-            || OrderBook::new("TEST-USD".to_string(), 100_000, 100),
+            || OrderBook::new("TEST-USD".to_string(), 100_000),
             |mut book| {
                 black_box(book.add_order(1, 10100, 10, OrderSide::Bid, TimeInForce::GTC));
             },
@@ -20,7 +20,7 @@ fn bench_gtc_order_matching(c: &mut Criterion) {
     c.bench_function("immediate_match_gtc", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
                 book.add_order(1, 10100, 10, OrderSide::Ask, TimeInForce::GTC);
                 book
             },
@@ -36,7 +36,7 @@ fn bench_ioc_order_matching(c: &mut Criterion) {
     c.bench_function("immediate_match_ioc", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
                 book.add_order(1, 10100, 10, OrderSide::Ask, TimeInForce::GTC);
                 book
             },
@@ -52,7 +52,7 @@ fn bench_fok_order_matching(c: &mut Criterion) {
     c.bench_function("immediate_match_fok", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
                 book.add_order(1, 10100, 10, OrderSide::Ask, TimeInForce::GTC);
                 book
             },
@@ -68,7 +68,7 @@ fn bench_gtc_market_orders(c: &mut Criterion) {
     c.bench_function("market_order_sweep_gtc", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
                 // Populate the ask side
                 for i in 0..10 {
                     book.add_order(1, 10100 + i, 10, OrderSide::Ask, TimeInForce::GTC);
@@ -88,7 +88,7 @@ fn bench_ioc_market_orders(c: &mut Criterion) {
     c.bench_function("market_order_sweep_ioc", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
                 // Populate the ask side
                 for i in 0..10 {
                     book.add_order(1, 10100 + i, 10, OrderSide::Ask, TimeInForce::GTC);
@@ -108,7 +108,7 @@ fn bench_fok_market_orders(c: &mut Criterion) {
     c.bench_function("market_order_sweep_fok", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
                 // Populate the ask side
                 for i in 0..10 {
                     book.add_order(1, 10100 + i, 10, OrderSide::Ask, TimeInForce::GTC);
@@ -128,7 +128,7 @@ fn bench_order_cancellation(c: &mut Criterion) {
     c.bench_function("cancel_order", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
                 let (order, _) = book.add_order(1, 10100, 10, OrderSide::Bid, TimeInForce::GTC);
                 (book, order.unwrap())
             },
@@ -151,7 +151,7 @@ fn bench_throughput_add_orders(c: &mut Criterion) {
 
     group.bench_function("add_orders_throughput", |b| {
         b.iter_with_setup(
-            || OrderBook::new("TEST-USD".to_string(), 100_000, 100),
+            || OrderBook::new("TEST-USD".to_string(), 100_000),
             |mut book| {
                 // Perform multiple operations to get better throughput measurement
                 for i in 0..1000 {
@@ -176,7 +176,7 @@ fn bench_throughput_mixed_operations(c: &mut Criterion) {
     group.bench_function("mixed_operations_throughput", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
                 let mut order_ids = Vec::new();
 
                 // Pre-populate with some orders and track their IDs
@@ -247,7 +247,7 @@ fn bench_sustained_load(c: &mut Criterion) {
 
     group.bench_function("sustained_add_orders", |b| {
         b.iter_with_setup(
-            || OrderBook::new("TEST-USD".to_string(), 100_000, 100),
+            || OrderBook::new("TEST-USD".to_string(), 100_000),
             |mut book| {
                 // Simulate sustained load with 10,000 operations
                 for i in 0..10_000 {
