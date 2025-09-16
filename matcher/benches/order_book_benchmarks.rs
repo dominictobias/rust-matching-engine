@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use matcher::orderbook::OrderBook;
 use matcher::types::{OrderSide, TimeInForce};
 use std::hint::black_box;
@@ -7,9 +7,9 @@ use std::hint::black_box;
 fn bench_add_limit_orders(c: &mut Criterion) {
     c.bench_function("add_limit_order", |b| {
         b.iter_with_setup(
-            || OrderBook::new("TEST-USD".to_string(), 100_000),
+            || OrderBook::new("TEST-USD".to_string(), 100_000, 100),
             |mut book| {
-                black_box(book.add_order(10100, 10, OrderSide::Bid, TimeInForce::GTC));
+                black_box(book.add_order(1, 10100, 10, OrderSide::Bid, TimeInForce::GTC));
             },
         )
     });
@@ -20,12 +20,12 @@ fn bench_gtc_order_matching(c: &mut Criterion) {
     c.bench_function("immediate_match_gtc", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
-                book.add_order(10100, 10, OrderSide::Ask, TimeInForce::GTC);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+                book.add_order(1, 10100, 10, OrderSide::Ask, TimeInForce::GTC);
                 book
             },
             |mut book| {
-                black_box(book.add_order(10100, 5, OrderSide::Bid, TimeInForce::GTC));
+                black_box(book.add_order(1, 10100, 5, OrderSide::Bid, TimeInForce::GTC));
             },
         )
     });
@@ -36,12 +36,12 @@ fn bench_ioc_order_matching(c: &mut Criterion) {
     c.bench_function("immediate_match_ioc", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
-                book.add_order(10100, 10, OrderSide::Ask, TimeInForce::GTC);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+                book.add_order(1, 10100, 10, OrderSide::Ask, TimeInForce::GTC);
                 book
             },
             |mut book| {
-                black_box(book.add_order(10100, 5, OrderSide::Bid, TimeInForce::IOC));
+                black_box(book.add_order(1, 10100, 5, OrderSide::Bid, TimeInForce::IOC));
             },
         )
     });
@@ -52,12 +52,12 @@ fn bench_fok_order_matching(c: &mut Criterion) {
     c.bench_function("immediate_match_fok", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
-                book.add_order(10100, 10, OrderSide::Ask, TimeInForce::GTC);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+                book.add_order(1, 10100, 10, OrderSide::Ask, TimeInForce::GTC);
                 book
             },
             |mut book| {
-                black_box(book.add_order(10100, 10, OrderSide::Bid, TimeInForce::FOK));
+                black_box(book.add_order(1, 10100, 10, OrderSide::Bid, TimeInForce::FOK));
             },
         )
     });
@@ -68,16 +68,16 @@ fn bench_gtc_market_orders(c: &mut Criterion) {
     c.bench_function("market_order_sweep_gtc", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
                 // Populate the ask side
                 for i in 0..10 {
-                    book.add_order(10100 + i, 10, OrderSide::Ask, TimeInForce::GTC);
+                    book.add_order(1, 10100 + i, 10, OrderSide::Ask, TimeInForce::GTC);
                 }
                 book
             },
             |mut book| {
                 // Market buy order that will sweep some of the book
-                black_box(book.add_order(0, 25, OrderSide::Bid, TimeInForce::GTC));
+                black_box(book.add_order(1, 0, 25, OrderSide::Bid, TimeInForce::GTC));
             },
         )
     });
@@ -88,16 +88,16 @@ fn bench_ioc_market_orders(c: &mut Criterion) {
     c.bench_function("market_order_sweep_ioc", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
                 // Populate the ask side
                 for i in 0..10 {
-                    book.add_order(10100 + i, 10, OrderSide::Ask, TimeInForce::GTC);
+                    book.add_order(1, 10100 + i, 10, OrderSide::Ask, TimeInForce::GTC);
                 }
                 book
             },
             |mut book| {
                 // Market buy order that will sweep some of the book
-                black_box(book.add_order(0, 25, OrderSide::Bid, TimeInForce::IOC));
+                black_box(book.add_order(1, 0, 25, OrderSide::Bid, TimeInForce::IOC));
             },
         )
     });
@@ -108,16 +108,16 @@ fn bench_fok_market_orders(c: &mut Criterion) {
     c.bench_function("market_order_sweep_fok", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
                 // Populate the ask side
                 for i in 0..10 {
-                    book.add_order(10100 + i, 10, OrderSide::Ask, TimeInForce::GTC);
+                    book.add_order(1, 10100 + i, 10, OrderSide::Ask, TimeInForce::GTC);
                 }
                 book
             },
             |mut book| {
                 // Market buy order that will sweep some of the book
-                black_box(book.add_order(0, 100, OrderSide::Bid, TimeInForce::FOK));
+                black_box(book.add_order(1, 0, 100, OrderSide::Bid, TimeInForce::FOK));
             },
         )
     });
@@ -128,8 +128,8 @@ fn bench_order_cancellation(c: &mut Criterion) {
     c.bench_function("cancel_order", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
-                let (order, _) = book.add_order(10100, 10, OrderSide::Bid, TimeInForce::GTC);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
+                let (order, _) = book.add_order(1, 10100, 10, OrderSide::Bid, TimeInForce::GTC);
                 (book, order.unwrap())
             },
             |(mut book, order_to_cancel)| {
@@ -151,7 +151,7 @@ fn bench_throughput_add_orders(c: &mut Criterion) {
 
     group.bench_function("add_orders_throughput", |b| {
         b.iter_with_setup(
-            || OrderBook::new("TEST-USD".to_string(), 100_000),
+            || OrderBook::new("TEST-USD".to_string(), 100_000, 100),
             |mut book| {
                 // Perform multiple operations to get better throughput measurement
                 for i in 0..1000 {
@@ -161,7 +161,7 @@ fn bench_throughput_add_orders(c: &mut Criterion) {
                     } else {
                         OrderSide::Ask
                     };
-                    black_box(book.add_order(price, 10, side, TimeInForce::GTC));
+                    black_box(book.add_order(1, price, 10, side, TimeInForce::GTC));
                 }
             },
         )
@@ -176,18 +176,18 @@ fn bench_throughput_mixed_operations(c: &mut Criterion) {
     group.bench_function("mixed_operations_throughput", |b| {
         b.iter_with_setup(
             || {
-                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
+                let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
                 let mut order_ids = Vec::new();
 
                 // Pre-populate with some orders and track their IDs
                 for i in 0..100 {
                     let (order, _) =
-                        book.add_order(10100 + i, 10, OrderSide::Bid, TimeInForce::GTC);
+                        book.add_order(1, 10100 + i, 10, OrderSide::Bid, TimeInForce::GTC);
                     if let Some(order) = order {
                         order_ids.push((order.id, 10100 + i, OrderSide::Bid));
                     }
                     let (order, _) =
-                        book.add_order(10200 + i, 10, OrderSide::Ask, TimeInForce::GTC);
+                        book.add_order(1, 10200 + i, 10, OrderSide::Ask, TimeInForce::GTC);
                     if let Some(order) = order {
                         order_ids.push((order.id, 10200 + i, OrderSide::Ask));
                     }
@@ -202,18 +202,24 @@ fn bench_throughput_mixed_operations(c: &mut Criterion) {
                             // Add new order
                             let price = 10300 + (i % 50);
                             let (order, _) =
-                                book.add_order(price, 5, OrderSide::Bid, TimeInForce::GTC);
+                                book.add_order(1, price, 5, OrderSide::Bid, TimeInForce::GTC);
                             if let Some(order) = order {
                                 order_ids.push((order.id, price, OrderSide::Bid));
                             }
                         }
                         1 => {
                             // Try to match with IOC
-                            black_box(book.add_order(10150, 5, OrderSide::Ask, TimeInForce::IOC));
+                            black_box(book.add_order(
+                                1,
+                                10150,
+                                5,
+                                OrderSide::Ask,
+                                TimeInForce::IOC,
+                            ));
                         }
                         2 => {
                             // Market order
-                            black_box(book.add_order(0, 5, OrderSide::Bid, TimeInForce::GTC));
+                            black_box(book.add_order(1, 0, 5, OrderSide::Bid, TimeInForce::GTC));
                         }
                         _ => {
                             // Cancel an existing order
@@ -241,7 +247,7 @@ fn bench_sustained_load(c: &mut Criterion) {
 
     group.bench_function("sustained_add_orders", |b| {
         b.iter_with_setup(
-            || OrderBook::new("TEST-USD".to_string(), 100_000),
+            || OrderBook::new("TEST-USD".to_string(), 100_000, 100),
             |mut book| {
                 // Simulate sustained load with 10,000 operations
                 for i in 0..10_000 {
@@ -252,7 +258,7 @@ fn bench_sustained_load(c: &mut Criterion) {
                         OrderSide::Ask
                     };
                     let quantity = 1 + (i % 100);
-                    black_box(book.add_order(price, quantity, side, TimeInForce::GTC));
+                    black_box(book.add_order(1, price, quantity, side, TimeInForce::GTC));
                 }
             },
         )

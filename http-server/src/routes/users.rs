@@ -58,20 +58,7 @@ pub async fn login(
     (StatusCode::OK, Json(response))
 }
 
-// User profile response
-#[derive(Serialize)]
-pub struct UserProfileResponse {
-    pub success: bool,
-    pub user: Option<AuthenticatedUser>,
-    pub message: String,
-}
-
 // Get user profile endpoint (protected route)
-pub async fn get_profile(AuthUser(user): AuthUser) -> (StatusCode, Json<UserProfileResponse>) {
-    let response = UserProfileResponse {
-        success: true,
-        user: Some(user),
-        message: "Profile retrieved successfully".to_string(),
-    };
-    (StatusCode::OK, Json(response))
+pub async fn get_profile(AuthUser(user): AuthUser) -> (StatusCode, Json<AuthenticatedUser>) {
+    (StatusCode::OK, Json(user))
 }

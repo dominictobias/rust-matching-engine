@@ -21,6 +21,7 @@ pub enum TimeInForce {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Order {
     pub id: u64,
+    pub user_id: u64,
     /// Price in integer ticks (see price_multiplier in OrderBook)
     pub price_tick: u64,
     pub quantity: u64,
@@ -36,6 +37,8 @@ pub struct Trade {
     pub id: u64,
     pub taker_order_id: u64,
     pub maker_order_id: u64,
+    pub taker_user_id: u64,
+    pub maker_user_id: u64,
     pub quantity: u64,
     pub price_tick: u64,
     pub timestamp: u64,

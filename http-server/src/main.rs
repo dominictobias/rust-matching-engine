@@ -37,11 +37,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut order_books = HashMap::new();
     order_books.insert(
         "BTC-USD".to_string(),
-        OrderBook::new("BTC-USD".to_string(), 1_000_000),
+        OrderBook::new("BTC-USD".to_string(), 1_000_000, 100), // 100 = 2 decimal places
     );
     order_books.insert(
         "SOL-USD".to_string(),
-        OrderBook::new("SOL-USD".to_string(), 1_000_000),
+        OrderBook::new("SOL-USD".to_string(), 1_000_000, 100), // 100 = 2 decimal places
     );
 
     let state = AppState {

@@ -1,7 +1,7 @@
 use matcher::orderbook::OrderBook;
 use matcher::types::{OrderSide, TimeInForce};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -21,7 +21,7 @@ fn test_sustained_add_orders() {
 
     let duration = Duration::from_secs(10);
     let start = Instant::now();
-    let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
+    let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
     let mut operations = 0;
 
     while start.elapsed() < duration {
@@ -33,7 +33,7 @@ fn test_sustained_add_orders() {
         };
         let quantity = 1 + (operations % 100);
 
-        book.add_order(price, quantity, side, TimeInForce::GTC);
+        book.add_order(1, price, quantity, side, TimeInForce::GTC);
         operations += 1;
     }
 
@@ -51,16 +51,16 @@ fn test_mixed_workload() {
 
     let duration = Duration::from_secs(10);
     let start = Instant::now();
-    let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
+    let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
     let mut order_ids = Vec::new();
 
     // Pre-populate with some orders and track their IDs
     for i in 0..1000 {
-        let (order, _) = book.add_order(10100 + i, 10, OrderSide::Bid, TimeInForce::GTC);
+        let (order, _) = book.add_order(1, 10100 + i, 10, OrderSide::Bid, TimeInForce::GTC);
         if let Some(order) = order {
             order_ids.push((order.id, 10100 + i, OrderSide::Bid));
         }
-        let (order, _) = book.add_order(10200 + i, 10, OrderSide::Ask, TimeInForce::GTC);
+        let (order, _) = book.add_order(1, 10200 + i, 10, OrderSide::Ask, TimeInForce::GTC);
         if let Some(order) = order {
             order_ids.push((order.id, 10200 + i, OrderSide::Ask));
         }
@@ -75,25 +75,25 @@ fn test_mixed_workload() {
             0 => {
                 // Add new limit order
                 let price = 10300 + (operations % 500);
-                let (order, _) = book.add_order(price, 5, OrderSide::Bid, TimeInForce::GTC);
+                let (order, _) = book.add_order(1, price, 5, OrderSide::Bid, TimeInForce::GTC);
                 if let Some(order) = order {
                     order_ids.push((order.id, price, OrderSide::Bid));
                 }
             }
             1 => {
                 // Try to match with IOC
-                let (_, trades) = book.add_order(10150, 5, OrderSide::Ask, TimeInForce::IOC);
+                let (_, trades) = book.add_order(1, 10150, 5, OrderSide::Ask, TimeInForce::IOC);
                 if !trades.is_empty() {
                     matches += 1;
                 }
             }
             2 => {
                 // Market order
-                book.add_order(0, 5, OrderSide::Bid, TimeInForce::GTC);
+                book.add_order(1, 0, 5, OrderSide::Bid, TimeInForce::GTC);
             }
             3 => {
                 // FOK order
-                let (_, trades) = book.add_order(10100, 10, OrderSide::Ask, TimeInForce::FOK);
+                let (_, trades) = book.add_order(1, 10100, 10, OrderSide::Ask, TimeInForce::FOK);
                 if !trades.is_empty() {
                     matches += 1;
                 }
@@ -132,6 +132,7 @@ fn test_concurrent_access() {
     let book = Arc::new(std::sync::Mutex::new(OrderBook::new(
         "TEST-USD".to_string(),
         100_000,
+        100,
     )));
     let operations = Arc::new(AtomicU64::new(0));
     let duration = Duration::from_secs(5);
@@ -157,7 +158,7 @@ fn test_concurrent_access() {
                         OrderSide::Ask
                     };
 
-                    book.add_order(price, 10, side, TimeInForce::GTC);
+                    book.add_order(1, price, 10, side, TimeInForce::GTC);
                 }
                 local_ops += 1;
             }
@@ -188,7 +189,7 @@ fn test_concurrent_access() {
 fn test_memory_usage() {
     println!("💾 Testing memory usage under load...");
 
-    let mut book = OrderBook::new("TEST-USD".to_string(), 100_000);
+    let mut book = OrderBook::new("TEST-USD".to_string(), 100_000, 100);
     let start = Instant::now();
 
     // Add a large number of orders
@@ -201,7 +202,7 @@ fn test_memory_usage() {
         };
         let quantity = 1 + (i % 1000);
 
-        book.add_order(price, quantity, side, TimeInForce::GTC);
+        book.add_order(1, price, quantity, side, TimeInForce::GTC);
 
         if i % 10_000 == 0 && i > 0 {
             let elapsed = start.elapsed();

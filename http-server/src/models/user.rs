@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
+    pub user_id: u64,
     pub session_id: String,
     pub email: String,
     pub funds: UserFunds,
@@ -26,6 +27,7 @@ impl Default for UserFunds {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthenticatedUser {
+    pub user_id: u64,
     pub session_id: String,
     pub email: String,
     pub funds: UserFunds,
@@ -34,6 +36,7 @@ pub struct AuthenticatedUser {
 impl From<User> for AuthenticatedUser {
     fn from(user: User) -> Self {
         Self {
+            user_id: user.user_id,
             session_id: user.session_id,
             email: user.email,
             funds: user.funds,

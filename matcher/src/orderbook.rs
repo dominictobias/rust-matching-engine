@@ -45,6 +45,8 @@ pub struct OrderBook {
 
     /// Maximum price tick we support (determines Vec size)
     max_price_tick: u64,
+    /// Multiplier to convert decimal prices to integer ticks
+    tick_multiplier: u64,
 
     order_id_counter: u64,
     trade_id_counter: u64,
@@ -85,7 +87,7 @@ impl OrderBook {
     }
 
     /// Creates a new, empty OrderBook instance with specified price range and symbol
-    pub fn new(symbol: String, max_price_tick: u64) -> Self {
+    pub fn new(symbol: String, max_price_tick: u64, tick_multiplier: u64) -> Self {
         OrderBook {
             symbol,
             levels: vec![None; max_price_tick as usize + 1],
@@ -102,6 +104,7 @@ impl OrderBook {
                 active_levels: BTreeMap::new(),
             },
             max_price_tick,
+            tick_multiplier,
             order_id_counter: 0,
             trade_id_counter: 0,
             total_orders: 0,
@@ -110,6 +113,7 @@ impl OrderBook {
 
     pub fn add_order(
         &mut self,
+        user_id: u64,
         price_tick: u64,
         quantity: u64,
         side: OrderSide,
@@ -136,6 +140,7 @@ impl OrderBook {
         // Create the order
         let mut order = Order {
             id: order_id,
+            user_id,
             price_tick,
             quantity,
             quantity_filled: 0,
@@ -285,8 +290,12 @@ impl OrderBook {
             // Market buy order: iterate from best_ask up to worst_ask
             (start_tick..=end_tick).collect::<Vec<_>>()
         } else {
-            // Limit orders: normal iteration
-            (start_tick..=end_tick).collect::<Vec<_>>()
+            // Limit orders: iterate from end_tick to start_tick (inclusive)
+            if start_tick >= end_tick {
+                (end_tick..=start_tick).collect::<Vec<_>>()
+            } else {
+                (start_tick..=end_tick).collect::<Vec<_>>()
+            }
         };
 
         'outer: for tick in tick_range {
@@ -310,6 +319,8 @@ impl OrderBook {
                         id: self.trade_id_counter,
                         taker_order_id: order.id,
                         maker_order_id: resting_order.id,
+                        taker_user_id: order.user_id,
+                        maker_user_id: resting_order.user_id,
                         quantity: quantity_to_fill,
                         price_tick: resting_order.price_tick,
                         timestamp: get_current_timestamp(),
@@ -589,6 +600,25 @@ impl OrderBook {
         &self.symbol
     }
 
+    /// Get the tick multiplier for this orderbook
+    pub fn tick_multiplier(&self) -> u64 {
+        self.tick_multiplier
+    }
+
+    /// Get an order by its ID
+    pub fn get_order_by_id(&self, order_id: u64) -> Option<&Order> {
+        for level in &self.levels {
+            if let Some(level) = level {
+                for order in &level.orders {
+                    if order.id == order_id {
+                        return Some(order);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn cancel_order(&mut self, order_id: u64, price_tick: u64, side: OrderSide) -> bool {
         if (price_tick as usize) >= self.levels.len() {
             return false;
@@ -679,7 +709,7 @@ mod tests {
     use crate::types::{OrderSide, TimeInForce};
 
     fn setup_book() -> OrderBook {
-        OrderBook::new("TEST-USD".to_string(), 1000)
+        OrderBook::new("TEST-USD".to_string(), 1000, 100) // 100 = 2 decimal places
     }
 
     #[test]
@@ -693,6 +723,7 @@ mod tests {
         assert_eq!(book.order_id_counter, 0);
         assert_eq!(book.trade_id_counter, 0);
         assert_eq!(book.max_price_tick, 1000);
+        assert_eq!(book.tick_multiplier, 100);
     }
 
     #[test]
@@ -703,7 +734,7 @@ mod tests {
 
         // Add a buy order
         let (order, trades) =
-            book.add_order(price_tick, quantity, OrderSide::Bid, TimeInForce::GTC);
+            book.add_order(1, price_tick, quantity, OrderSide::Bid, TimeInForce::GTC);
 
         assert!(order.is_some());
         let order = order.unwrap();
@@ -723,7 +754,7 @@ mod tests {
         // Add a sell order
         let sell_price_tick = 102;
         let (sell_order, trades) =
-            book.add_order(sell_price_tick, 5, OrderSide::Ask, TimeInForce::GTC);
+            book.add_order(1, sell_price_tick, 5, OrderSide::Ask, TimeInForce::GTC);
         assert!(sell_order.is_some());
         assert!(trades.is_empty());
         assert_eq!(book.ask_side.best_tick, Some(sell_price_tick));
@@ -738,10 +769,10 @@ mod tests {
         let mut book = setup_book();
 
         // Add a resting sell order
-        book.add_order(101, 10, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 101, 10, OrderSide::Ask, TimeInForce::GTC);
 
         // Add a matching buy order
-        let (buy_order, trades) = book.add_order(101, 5, OrderSide::Bid, TimeInForce::GTC);
+        let (buy_order, trades) = book.add_order(1, 101, 5, OrderSide::Bid, TimeInForce::GTC);
 
         assert!(buy_order.is_some());
         let buy_order = buy_order.unwrap();
@@ -762,11 +793,11 @@ mod tests {
     #[test]
     fn test_market_order_full_fill() {
         let mut book = setup_book();
-        book.add_order(101, 10, OrderSide::Ask, TimeInForce::GTC);
-        book.add_order(102, 10, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 101, 10, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 102, 10, OrderSide::Ask, TimeInForce::GTC);
 
         // Market buy order, price_tick = 0
-        let (market_order, trades) = book.add_order(0, 15, OrderSide::Bid, TimeInForce::GTC);
+        let (market_order, trades) = book.add_order(1, 0, 15, OrderSide::Bid, TimeInForce::GTC);
 
         assert!(market_order.is_some());
         let market_order = market_order.unwrap();
@@ -787,7 +818,7 @@ mod tests {
     #[test]
     fn test_cancel_order() {
         let mut book = setup_book();
-        let (order, _) = book.add_order(101, 10, OrderSide::Bid, TimeInForce::GTC);
+        let (order, _) = book.add_order(1, 101, 10, OrderSide::Bid, TimeInForce::GTC);
         let order_id = order.unwrap().id;
 
         let cancelled = book.cancel_order(order_id, 101, OrderSide::Bid);
@@ -804,10 +835,10 @@ mod tests {
     #[test]
     fn test_ioc_order_partial_fill() {
         let mut book = setup_book();
-        book.add_order(101, 5, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 101, 5, OrderSide::Ask, TimeInForce::GTC);
 
         // IOC order for 10, only 5 available
-        let (order, trades) = book.add_order(102, 10, OrderSide::Bid, TimeInForce::IOC);
+        let (order, trades) = book.add_order(1, 102, 10, OrderSide::Bid, TimeInForce::IOC);
 
         // IOC orders are not added to the book, so we get None
         assert!(order.is_none());
@@ -823,10 +854,10 @@ mod tests {
     #[test]
     fn test_fok_order_success() {
         let mut book = setup_book();
-        book.add_order(101, 10, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 101, 10, OrderSide::Ask, TimeInForce::GTC);
 
         // FOK order that can be filled
-        let (order, trades) = book.add_order(101, 10, OrderSide::Bid, TimeInForce::FOK);
+        let (order, trades) = book.add_order(1, 101, 10, OrderSide::Bid, TimeInForce::FOK);
 
         assert!(order.is_some());
         assert_eq!(order.unwrap().quantity_filled, 10);
@@ -840,10 +871,10 @@ mod tests {
     #[test]
     fn test_fok_order_fail() {
         let mut book = setup_book();
-        book.add_order(101, 5, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 101, 5, OrderSide::Ask, TimeInForce::GTC);
 
         // FOK order that cannot be fully filled
-        let (order, trades) = book.add_order(101, 10, OrderSide::Bid, TimeInForce::FOK);
+        let (order, trades) = book.add_order(1, 101, 10, OrderSide::Bid, TimeInForce::FOK);
 
         // Order should be rejected
         assert!(order.is_none());
@@ -859,8 +890,8 @@ mod tests {
     fn test_cancel_order_updates_best_tick() {
         let mut book = setup_book();
         // Add two orders on the buy side
-        let (order1, _) = book.add_order(101, 10, OrderSide::Bid, TimeInForce::GTC);
-        book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
+        let (order1, _) = book.add_order(1, 101, 10, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 100, 10, OrderSide::Bid, TimeInForce::GTC);
         let order1_id = order1.unwrap().id;
 
         assert_eq!(book.bid_side.best_tick, Some(101));
@@ -881,23 +912,23 @@ mod tests {
         let mut book = setup_book();
 
         // Test buy side - higher prices should become new best tick
-        book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 100, 10, OrderSide::Bid, TimeInForce::GTC);
         assert_eq!(book.bid_side.best_tick, Some(100));
 
-        book.add_order(101, 5, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 101, 5, OrderSide::Bid, TimeInForce::GTC);
         assert_eq!(book.bid_side.best_tick, Some(101)); // Higher price becomes best
 
-        book.add_order(99, 5, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 99, 5, OrderSide::Bid, TimeInForce::GTC);
         assert_eq!(book.bid_side.best_tick, Some(101)); // Lower price doesn't change best
 
         // Test sell side - lower prices should become new best tick
-        book.add_order(110, 10, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 110, 10, OrderSide::Ask, TimeInForce::GTC);
         assert_eq!(book.ask_side.best_tick, Some(110));
 
-        book.add_order(109, 5, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 109, 5, OrderSide::Ask, TimeInForce::GTC);
         assert_eq!(book.ask_side.best_tick, Some(109)); // Lower price becomes best
 
-        book.add_order(111, 5, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 111, 5, OrderSide::Ask, TimeInForce::GTC);
         assert_eq!(book.ask_side.best_tick, Some(109)); // Higher price doesn't change best
     }
 
@@ -906,13 +937,13 @@ mod tests {
         let mut book = setup_book();
 
         // Set up sell side with multiple price levels
-        book.add_order(101, 10, OrderSide::Ask, TimeInForce::GTC);
-        book.add_order(102, 10, OrderSide::Ask, TimeInForce::GTC);
-        book.add_order(103, 10, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 101, 10, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 102, 10, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 103, 10, OrderSide::Ask, TimeInForce::GTC);
         assert_eq!(book.ask_side.best_tick, Some(101));
 
         // Market buy order that fully consumes the best ask level
-        let (order, trades) = book.add_order(0, 10, OrderSide::Bid, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 0, 10, OrderSide::Bid, TimeInForce::GTC);
         assert!(order.is_some());
         assert_eq!(trades.len(), 1);
         assert_eq!(trades[0].price_tick, 101);
@@ -922,7 +953,7 @@ mod tests {
         assert_eq!(book.ask_side.best_tick, Some(102));
 
         // Another market buy that consumes the next level partially
-        let (order, trades) = book.add_order(0, 5, OrderSide::Bid, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 0, 5, OrderSide::Bid, TimeInForce::GTC);
         assert!(order.is_some());
         assert_eq!(trades.len(), 1);
         assert_eq!(trades[0].price_tick, 102);
@@ -934,7 +965,7 @@ mod tests {
         assert_eq!(level.total_quantity, 5);
 
         // Final market buy that fully consumes the 102 level
-        let (order, trades) = book.add_order(0, 5, OrderSide::Bid, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 0, 5, OrderSide::Bid, TimeInForce::GTC);
         assert!(order.is_some());
         assert_eq!(trades.len(), 1);
         assert_eq!(trades[0].price_tick, 102);
@@ -949,13 +980,13 @@ mod tests {
         let mut book = setup_book();
 
         // Set up bid side with multiple price levels
-        book.add_order(103, 10, OrderSide::Bid, TimeInForce::GTC);
-        book.add_order(102, 10, OrderSide::Bid, TimeInForce::GTC);
-        book.add_order(101, 10, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 103, 10, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 102, 10, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 101, 10, OrderSide::Bid, TimeInForce::GTC);
         assert_eq!(book.bid_side.best_tick, Some(103));
 
         // Market sell order that fully consumes the best bid level
-        let (order, trades) = book.add_order(0, 10, OrderSide::Ask, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 0, 10, OrderSide::Ask, TimeInForce::GTC);
         assert!(order.is_some());
         assert_eq!(trades.len(), 1);
         assert_eq!(trades[0].price_tick, 103);
@@ -965,7 +996,7 @@ mod tests {
         assert_eq!(book.bid_side.best_tick, Some(102));
 
         // Another market sell that fully consumes two levels
-        let (order, trades) = book.add_order(0, 20, OrderSide::Ask, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 0, 20, OrderSide::Ask, TimeInForce::GTC);
         assert!(order.is_some());
         assert_eq!(trades.len(), 2);
         assert_eq!(trades[0].price_tick, 102);
@@ -982,10 +1013,10 @@ mod tests {
         let mut book = setup_book();
 
         // Set up ask side with multiple small orders at the same price
-        book.add_order(101, 3, OrderSide::Ask, TimeInForce::GTC);
-        book.add_order(101, 3, OrderSide::Ask, TimeInForce::GTC);
-        book.add_order(101, 4, OrderSide::Ask, TimeInForce::GTC);
-        book.add_order(102, 20, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 101, 3, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 101, 3, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 101, 4, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 102, 20, OrderSide::Ask, TimeInForce::GTC);
 
         assert_eq!(book.ask_side.best_tick, Some(101));
         let level = book.levels[101 as usize].as_ref().unwrap();
@@ -993,7 +1024,7 @@ mod tests {
         assert_eq!(level.orders.len(), 3);
 
         // Large buy order that consumes all orders at 101 and moves to 102
-        let (order, trades) = book.add_order(0, 15, OrderSide::Bid, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 0, 15, OrderSide::Bid, TimeInForce::GTC);
         assert!(order.is_some());
         assert_eq!(trades.len(), 4); // 3 orders at 101 + 1 partial at 102
 
@@ -1025,7 +1056,7 @@ mod tests {
         let mut book = setup_book();
 
         // Market order with no liquidity should be cancelled
-        let (order, trades) = book.add_order(0, 10, OrderSide::Bid, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 0, 10, OrderSide::Bid, TimeInForce::GTC);
         assert!(order.is_none());
         assert!(trades.is_empty());
     }
@@ -1035,7 +1066,7 @@ mod tests {
         let mut book = setup_book();
 
         // IOC order with no liquidity should be rejected
-        let (order, trades) = book.add_order(100, 10, OrderSide::Bid, TimeInForce::IOC);
+        let (order, trades) = book.add_order(1, 100, 10, OrderSide::Bid, TimeInForce::IOC);
         assert!(order.is_none());
         assert!(trades.is_empty());
     }
@@ -1045,7 +1076,7 @@ mod tests {
         let mut book = setup_book();
 
         // FOK order with no liquidity should be rejected
-        let (order, trades) = book.add_order(100, 10, OrderSide::Bid, TimeInForce::FOK);
+        let (order, trades) = book.add_order(1, 100, 10, OrderSide::Bid, TimeInForce::FOK);
         assert!(order.is_none());
         assert!(trades.is_empty());
     }
@@ -1055,15 +1086,15 @@ mod tests {
         let mut book = setup_book();
 
         // Add a sell order at 100
-        book.add_order(100, 10, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 100, 10, OrderSide::Ask, TimeInForce::GTC);
 
         // Add a buy order at 99 (should not match)
-        let (order, trades) = book.add_order(99, 5, OrderSide::Bid, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 99, 5, OrderSide::Bid, TimeInForce::GTC);
         assert!(order.is_some());
         assert!(trades.is_empty());
 
         // Add a buy order at 100 (should match)
-        let (order, trades) = book.add_order(100, 5, OrderSide::Bid, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 100, 5, OrderSide::Bid, TimeInForce::GTC);
         assert!(order.is_some());
         assert_eq!(trades.len(), 1);
         assert_eq!(trades[0].quantity, 5);
@@ -1074,9 +1105,9 @@ mod tests {
         let mut book = setup_book();
 
         // Add multiple orders at the same price
-        book.add_order(100, 5, OrderSide::Bid, TimeInForce::GTC);
-        book.add_order(100, 3, OrderSide::Bid, TimeInForce::GTC);
-        book.add_order(100, 2, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 100, 5, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 100, 3, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 100, 2, OrderSide::Bid, TimeInForce::GTC);
 
         let level = book.levels[100 as usize].as_ref().unwrap();
         assert_eq!(level.total_quantity, 10);
@@ -1098,7 +1129,7 @@ mod tests {
         let mut book = setup_book();
 
         // Add an order
-        let (order, _) = book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
+        let (order, _) = book.add_order(1, 100, 10, OrderSide::Bid, TimeInForce::GTC);
         let order_id = order.unwrap().id;
 
         // Try to cancel with wrong price
@@ -1115,7 +1146,7 @@ mod tests {
         let mut book = setup_book();
 
         // Add a bid order
-        let (order, _) = book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
+        let (order, _) = book.add_order(1, 100, 10, OrderSide::Bid, TimeInForce::GTC);
         let order_id = order.unwrap().id;
 
         // Try to cancel with wrong side
@@ -1132,7 +1163,7 @@ mod tests {
         let mut book = setup_book();
 
         // Add an order
-        let (order, _) = book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
+        let (order, _) = book.add_order(1, 100, 10, OrderSide::Bid, TimeInForce::GTC);
         let order_id = order.unwrap().id;
 
         // Cancel it
@@ -1148,8 +1179,8 @@ mod tests {
     fn test_order_id_counter_increments() {
         let mut book = setup_book();
 
-        let (order1, _) = book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
-        let (order2, _) = book.add_order(101, 5, OrderSide::Ask, TimeInForce::GTC);
+        let (order1, _) = book.add_order(1, 100, 10, OrderSide::Bid, TimeInForce::GTC);
+        let (order2, _) = book.add_order(1, 101, 5, OrderSide::Ask, TimeInForce::GTC);
 
         assert_eq!(order1.unwrap().id, 0);
         assert_eq!(order2.unwrap().id, 1);
@@ -1161,11 +1192,11 @@ mod tests {
         let mut book = setup_book();
 
         // Add a resting order
-        book.add_order(100, 10, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 100, 10, OrderSide::Ask, TimeInForce::GTC);
 
         // Add matching orders
-        let (_, trades1) = book.add_order(100, 5, OrderSide::Bid, TimeInForce::GTC);
-        let (_, trades2) = book.add_order(100, 3, OrderSide::Bid, TimeInForce::GTC);
+        let (_, trades1) = book.add_order(1, 100, 5, OrderSide::Bid, TimeInForce::GTC);
+        let (_, trades2) = book.add_order(1, 100, 3, OrderSide::Bid, TimeInForce::GTC);
 
         assert_eq!(trades1[0].id, 0);
         assert_eq!(trades2[0].id, 1);
@@ -1177,9 +1208,9 @@ mod tests {
         let mut book = setup_book();
 
         // Add orders at different prices
-        book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
-        book.add_order(102, 5, OrderSide::Bid, TimeInForce::GTC);
-        book.add_order(98, 3, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 100, 10, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 102, 5, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 98, 3, OrderSide::Bid, TimeInForce::GTC);
 
         assert_eq!(book.bid_side.best_tick, Some(102)); // Highest price
         assert_eq!(book.bid_side.worst_tick, Some(98)); // Lowest price
@@ -1199,7 +1230,7 @@ mod tests {
         let mut book = setup_book();
 
         // Try to add order beyond max price tick
-        let (order, trades) = book.add_order(1001, 10, OrderSide::Bid, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 1001, 10, OrderSide::Bid, TimeInForce::GTC);
         assert!(order.is_none());
         assert!(trades.is_empty());
 
@@ -1213,7 +1244,7 @@ mod tests {
         let mut book = setup_book();
 
         // Zero price tick should not be added as limit order
-        let (order, trades) = book.add_order(0, 10, OrderSide::Bid, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 0, 10, OrderSide::Bid, TimeInForce::GTC);
         assert!(order.is_none());
         assert!(trades.is_empty());
     }
@@ -1223,10 +1254,10 @@ mod tests {
         let mut book = setup_book();
 
         // Add a large resting order
-        book.add_order(100, 100, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 100, 100, OrderSide::Ask, TimeInForce::GTC);
 
         // Partially fill it
-        let (order, trades) = book.add_order(100, 30, OrderSide::Bid, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 100, 30, OrderSide::Bid, TimeInForce::GTC);
         assert!(order.is_some());
         assert_eq!(trades.len(), 1);
         assert_eq!(trades[0].quantity, 30);
@@ -1242,8 +1273,8 @@ mod tests {
         let mut book = setup_book();
 
         // Add orders that cross the spread
-        book.add_order(100, 10, OrderSide::Ask, TimeInForce::GTC);
-        let (bid_order, trades) = book.add_order(102, 5, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 100, 10, OrderSide::Ask, TimeInForce::GTC);
+        let (bid_order, trades) = book.add_order(1, 102, 5, OrderSide::Bid, TimeInForce::GTC);
 
         // The bid at 102 should match against the ask at 100, filling 5 units
         assert!(bid_order.is_some());
@@ -1260,7 +1291,7 @@ mod tests {
         assert_eq!(book.ask_side.best_tick, Some(100));
 
         // Add an aggressive order that crosses
-        let (order, trades) = book.add_order(103, 8, OrderSide::Bid, TimeInForce::GTC);
+        let (order, trades) = book.add_order(1, 103, 8, OrderSide::Bid, TimeInForce::GTC);
         assert!(order.is_some());
         assert_eq!(trades.len(), 1);
         assert_eq!(trades[0].quantity, 5); // Should match remaining ask quantity
@@ -1290,8 +1321,8 @@ mod tests {
         let mut book = setup_book();
 
         // Add one bid and one ask
-        book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
-        book.add_order(105, 5, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 100, 10, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 105, 5, OrderSide::Ask, TimeInForce::GTC);
 
         let depth = book.get_depth(10);
 
@@ -1309,14 +1340,14 @@ mod tests {
         let mut book = setup_book();
 
         // Add multiple bid levels (higher prices should come first)
-        book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
-        book.add_order(102, 5, OrderSide::Bid, TimeInForce::GTC);
-        book.add_order(98, 15, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 100, 10, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 102, 5, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 98, 15, OrderSide::Bid, TimeInForce::GTC);
 
         // Add multiple ask levels (lower prices should come first)
-        book.add_order(105, 8, OrderSide::Ask, TimeInForce::GTC);
-        book.add_order(108, 12, OrderSide::Ask, TimeInForce::GTC);
-        book.add_order(103, 3, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 105, 8, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 108, 12, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 103, 3, OrderSide::Ask, TimeInForce::GTC);
 
         let depth = book.get_depth(10);
 
@@ -1345,12 +1376,12 @@ mod tests {
 
         // Add 5 bid levels
         for i in 0..5 {
-            book.add_order(100 + i, 10, OrderSide::Bid, TimeInForce::GTC);
+            book.add_order(1, 100 + i, 10, OrderSide::Bid, TimeInForce::GTC);
         }
 
         // Add 5 ask levels
         for i in 0..5 {
-            book.add_order(110 + i, 10, OrderSide::Ask, TimeInForce::GTC);
+            book.add_order(1, 110 + i, 10, OrderSide::Ask, TimeInForce::GTC);
         }
 
         // Request only 3 levels
@@ -1374,13 +1405,13 @@ mod tests {
         let mut book = setup_book();
 
         // Add orders
-        book.add_order(100, 10, OrderSide::Bid, TimeInForce::GTC);
-        book.add_order(102, 5, OrderSide::Bid, TimeInForce::GTC);
-        book.add_order(105, 8, OrderSide::Ask, TimeInForce::GTC);
-        book.add_order(108, 12, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 100, 10, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 102, 5, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 105, 8, OrderSide::Ask, TimeInForce::GTC);
+        book.add_order(1, 108, 12, OrderSide::Ask, TimeInForce::GTC);
 
         // Match some orders - this should consume the bid at 102 and partially consume ask at 105
-        book.add_order(105, 3, OrderSide::Bid, TimeInForce::GTC);
+        book.add_order(1, 105, 3, OrderSide::Bid, TimeInForce::GTC);
 
         let depth = book.get_depth(10);
 
@@ -1397,5 +1428,39 @@ mod tests {
         assert_eq!(depth.asks[0].quantity, 5); // 8 - 3 = 5
         assert_eq!(depth.asks[1].price_tick, 108);
         assert_eq!(depth.asks[1].quantity, 12);
+    }
+
+    #[test]
+    fn test_ask_crossing_bid_fix() {
+        let mut book = setup_book();
+
+        // Add bids at 102 (simulating your scenario with smaller numbers)
+        book.add_order(1, 102, 2, OrderSide::Bid, TimeInForce::GTC);
+
+        // Add an ask at 101 that should cross with the bids
+        let (ask_order, trades) = book.add_order(2, 101, 1, OrderSide::Ask, TimeInForce::GTC);
+
+        // The ask should be fully filled and not remain in the book
+        assert!(ask_order.is_some());
+        let ask_order = ask_order.unwrap();
+        assert_eq!(ask_order.quantity_filled, 1);
+        assert_eq!(ask_order.quantity, 1);
+
+        // Should have 1 trade
+        assert_eq!(trades.len(), 1);
+        let trade = &trades[0];
+        assert_eq!(trade.quantity, 1);
+        assert_eq!(trade.price_tick, 102); // Should match at bid price
+        assert_eq!(trade.taker_order_id, ask_order.id);
+        assert_eq!(trade.maker_order_id, 0); // First bid order
+
+        // The bid should be partially filled (2 - 1 = 1 remaining)
+        let bid_level = book.levels[102 as usize].as_ref().unwrap();
+        assert_eq!(bid_level.total_quantity, 1);
+        assert_eq!(bid_level.orders[0].quantity_filled, 1);
+
+        // The ask should not be in the book since it was fully filled
+        assert!(book.levels[101 as usize].is_none());
+        assert_eq!(book.ask_side.best_tick, None);
     }
 }

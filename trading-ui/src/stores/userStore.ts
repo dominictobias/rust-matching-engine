@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { AuthenticatedUser } from "../types/api";
+import { getProfile } from "../utils/api";
 
 interface UserState {
   // Persisted state (stored in localStorage)
@@ -19,6 +20,7 @@ interface UserActions {
   setSessionChecked: (checked: boolean) => void;
   setAuthStatus: (isAuthed: boolean) => void;
   markSessionAsValidated: () => void;
+  refreshProfile: () => Promise<void>;
 }
 
 type UserStore = UserState & UserActions;
@@ -33,7 +35,7 @@ const initialState: UserState = {
 
 export const useUserStore = create<UserStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       ...initialState,
       setUser: (user: AuthenticatedUser, session_id: string) => {
         set({
@@ -55,6 +57,42 @@ export const useUserStore = create<UserStore>()(
       },
       markSessionAsValidated: () => {
         set({ sessionChecked: true });
+      },
+      refreshProfile: async () => {
+        const state = get();
+
+        // If no session_id, mark as checked and unauthenticated
+        if (!state.session_id) {
+          set({
+            isAuthed: false,
+            sessionChecked: true,
+            user: null,
+            email: null,
+          });
+          return;
+        }
+
+        try {
+          const updatedUser = await getProfile(state.session_id);
+          set({
+            user: updatedUser,
+            email: updatedUser.email,
+            isAuthed: true,
+            sessionChecked: true,
+          });
+        } catch (error) {
+          console.error(
+            "Failed to refresh profile - session may be invalid:",
+            error
+          );
+          // If profile refresh fails, the session is likely invalid
+          set({
+            isAuthed: false,
+            sessionChecked: true,
+            user: null,
+            email: null,
+          });
+        }
       },
     }),
     {

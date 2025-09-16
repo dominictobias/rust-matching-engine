@@ -1,4 +1,8 @@
-import type { DepthResponse, MarketAsset } from "../types/api";
+import type {
+  DepthResponse,
+  MarketAsset,
+  UserProfileResponse,
+} from "../types/api";
 
 export interface ApiResponse<T = unknown> {
   success: boolean;
@@ -55,21 +59,6 @@ export async function authenticatedApiCall<T = unknown>(
   });
 }
 
-// Check if session is valid
-export async function validateSession(sessionId: string): Promise<boolean> {
-  try {
-    const res = await fetch("/api/profile", {
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${sessionId}`,
-      },
-    });
-    return res.ok;
-  } catch (_err) {
-    return false;
-  }
-}
-
 // Get orderbook depth
 export async function getDepth(
   symbol: string,
@@ -87,4 +76,11 @@ export async function getDepth(
 // Get markets/assets
 export async function getMarkets(): Promise<MarketAsset[]> {
   return apiCall<MarketAsset[]>("/api/markets");
+}
+
+// Get user profile
+export async function getProfile(
+  sessionId: string
+): Promise<UserProfileResponse> {
+  return authenticatedApiCall<UserProfileResponse>("/api/profile", sessionId);
 }

@@ -28,11 +28,7 @@ export interface LogoutResponse {
   message: string;
 }
 
-export interface UserProfileResponse {
-  success: boolean;
-  user?: AuthenticatedUser;
-  message: string;
-}
+export type UserProfileResponse = AuthenticatedUser;
 
 export interface UserFunds {
   btc: number;
@@ -112,4 +108,5 @@ export interface MarketAsset {
   icon: string;
   price: number;
   change24h: number;
+  tick_multiplier: number;
 }

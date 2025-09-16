@@ -9,6 +9,7 @@ pub struct MarketAsset {
     pub icon: String,
     pub price: f64,
     pub change24h: f64,
+    pub tick_multiplier: u64,
 }
 
 pub async fn get_markets() -> ResponseJson<Vec<MarketAsset>> {
@@ -21,6 +22,7 @@ pub async fn get_markets() -> ResponseJson<Vec<MarketAsset>> {
                 .to_string(),
             price: 115_771.03,
             change24h: 2.5,
+            tick_multiplier: 100, // 2 decimal places
         },
         MarketAsset {
             id: "SOLUSD".to_string(),
@@ -29,6 +31,7 @@ pub async fn get_markets() -> ResponseJson<Vec<MarketAsset>> {
             icon: "https://solana.com/src/img/branding/solanaLogoMark.svg".to_string(),
             price: 246.64,
             change24h: -1.2,
+            tick_multiplier: 100, // 2 decimal places
         },
     ];
 

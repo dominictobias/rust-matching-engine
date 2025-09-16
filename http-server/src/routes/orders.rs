@@ -90,6 +90,8 @@ pub struct TradeResponse {
     pub symbol: String,
     pub taker_order_id: u64,
     pub maker_order_id: u64,
+    pub taker_user_id: u64,
+    pub maker_user_id: u64,
     pub quantity: u64,
     pub price_tick: u64,
     pub timestamp: u64,
@@ -120,6 +122,8 @@ impl TradeResponse {
             symbol: symbol.to_string(),
             taker_order_id: trade.taker_order_id,
             maker_order_id: trade.maker_order_id,
+            taker_user_id: trade.taker_user_id,
+            maker_user_id: trade.maker_user_id,
             quantity: trade.quantity,
             price_tick: trade.price_tick,
             timestamp: trade.timestamp,
@@ -146,6 +150,45 @@ pub async fn add_order(
         );
     }
 
+    // Get the appropriate order book for the symbol first to get tick_multiplier
+    let tick_multiplier = {
+        let order_books = state.order_books.lock().unwrap();
+        match order_books.get(&payload.symbol) {
+            Some(book) => book.tick_multiplier(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(AddOrderResponse {
+                        order: None,
+                        trades: Vec::new(),
+                        success: false,
+                        message: format!("Symbol '{}' not supported", payload.symbol),
+                    }),
+                );
+            }
+        }
+    };
+
+    // Debit funds before placing order
+    if let Err(error_msg) = state.storage.debit_funds_for_order(
+        _user.user_id,
+        &payload.symbol,
+        payload.side,
+        payload.quantity,
+        payload.price_tick,
+        tick_multiplier,
+    ) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(AddOrderResponse {
+                order: None,
+                trades: Vec::new(),
+                success: false,
+                message: error_msg,
+            }),
+        );
+    }
+
     // Get the appropriate order book for the symbol
     let mut order_books = state.order_books.lock().unwrap();
     let order_book = match order_books.get_mut(&payload.symbol) {
@@ -165,11 +208,54 @@ pub async fn add_order(
 
     // Add order to the order book - Serde already parsed the enums!
     let (order, trades) = order_book.add_order(
+        _user.user_id,
         payload.price_tick,
         payload.quantity,
         payload.side,
         payload.time_in_force,
     );
+
+    // Process trades and settle accounts
+    for trade in &trades {
+        if let Err(error_msg) = state.storage.settle_trade(
+            trade,
+            &payload.symbol,
+            trade.taker_user_id,
+            trade.maker_user_id,
+            tick_multiplier,
+        ) {
+            tracing::error!("Failed to settle trade {}: {}", trade.id, error_msg);
+            // Continue processing other trades even if one fails
+        }
+    }
+
+    // If order was rejected, credit funds back
+    if order.is_none() {
+        let _ = state.storage.credit_funds_back(
+            _user.user_id,
+            &payload.symbol,
+            payload.side,
+            payload.quantity,
+            payload.price_tick,
+            tick_multiplier,
+        );
+    } else if let Some(ref placed_order) = order {
+        // Handle partial fills - only refund unfilled portion if order is completely filled
+        // For resting orders, keep funds debited until order is filled or cancelled
+        let unfilled_quantity = placed_order.quantity - placed_order.quantity_filled;
+        if unfilled_quantity > 0 && placed_order.quantity_filled > 0 {
+            // Only refund if there was a partial fill (some filled, some unfilled)
+            // For completely unfilled resting orders, keep funds debited
+            let _ = state.storage.handle_partial_fill_refund(
+                _user.user_id,
+                &payload.symbol,
+                payload.side,
+                unfilled_quantity,
+                payload.price_tick,
+                tick_multiplier,
+            );
+        }
+    }
 
     let response = AddOrderResponse {
         order: order
@@ -204,6 +290,22 @@ pub async fn cancel_order(
     Json(payload): Json<CancelOrderRequest>,
 ) -> (StatusCode, Json<CancelOrderResponse>) {
     // Get the appropriate order book for the symbol
+    let tick_multiplier = {
+        let order_books = state.order_books.lock().unwrap();
+        match order_books.get(&payload.symbol) {
+            Some(book) => book.tick_multiplier(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(CancelOrderResponse {
+                        success: false,
+                        message: format!("Symbol '{}' not supported", payload.symbol),
+                    }),
+                );
+            }
+        }
+    };
+
     let mut order_books = state.order_books.lock().unwrap();
     let order_book = match order_books.get_mut(&payload.symbol) {
         Some(book) => book,
@@ -220,6 +322,24 @@ pub async fn cancel_order(
 
     // Cancel order in the order book - Serde already parsed the enum!
     let success = order_book.cancel_order(order_id, payload.price_tick, payload.side);
+
+    // If order was successfully cancelled, refund the funds back to the user
+    if success {
+        // Get the cancelled order details to refund the correct amount
+        if let Some(cancelled_order) = order_book.get_order_by_id(order_id) {
+            let unfilled_quantity = cancelled_order.quantity - cancelled_order.quantity_filled;
+            if unfilled_quantity > 0 {
+                let _ = state.storage.credit_funds_back(
+                    _user.user_id,
+                    &payload.symbol,
+                    payload.side,
+                    unfilled_quantity,
+                    payload.price_tick,
+                    tick_multiplier,
+                );
+            }
+        }
+    }
 
     let response = CancelOrderResponse {
         success,
