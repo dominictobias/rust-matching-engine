@@ -16,3 +16,8 @@ This project consists of:
 ## Running
 
 Start all three services vwith `cargo run .` or `bun dev`.
+
+## Screenshots
+
+<img width="1504" height="556" alt="Screenshot 2025-09-17 at 1 27 59 PM" src="https://github.com/user-attachments/assets/d39c84ae-534c-4fc2-801c-230542cb81f9" />
+<img width="1512" height="855" alt="Screenshot 2025-09-17 at 1 27 50 PM" src="https://github.com/user-attachments/assets/58b72446-5fe5-41d1-911c-706c410f682c" />
