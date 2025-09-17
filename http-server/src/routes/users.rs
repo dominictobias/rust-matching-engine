@@ -3,7 +3,7 @@ use hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{AppState, middleware::AuthUser, models::AuthenticatedUser};
+use crate::{AppState, middleware::AuthUser, models::User};
 
 // Login request
 #[derive(Deserialize)]
@@ -17,8 +17,7 @@ pub struct LoginRequest {
 pub struct LoginResponse {
     pub success: bool,
     pub message: String,
-    pub session_id: Option<String>,
-    pub user: Option<AuthenticatedUser>,
+    pub user: Option<User>,
 }
 
 // Login endpoint
@@ -31,7 +30,6 @@ pub async fn login(
         let response = LoginResponse {
             success: false,
             message: "Email and password are required".to_string(),
-            session_id: None,
             user: None,
         };
         return (StatusCode::BAD_REQUEST, Json(response));
@@ -47,18 +45,16 @@ pub async fn login(
     let user = state
         .storage
         .get_or_create_account_with_session(&payload.email, &session_id);
-    let authenticated_user = AuthenticatedUser::from(user.clone());
 
     let response = LoginResponse {
         success: true,
         message: "Login successful".to_string(),
-        session_id: Some(user.session_id),
-        user: Some(authenticated_user),
+        user: Some(user),
     };
     (StatusCode::OK, Json(response))
 }
 
 // Get user profile endpoint (protected route)
-pub async fn get_profile(AuthUser(user): AuthUser) -> (StatusCode, Json<AuthenticatedUser>) {
+pub async fn get_profile(AuthUser(user): AuthUser) -> (StatusCode, Json<User>) {
     (StatusCode::OK, Json(user))
 }

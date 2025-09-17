@@ -19,8 +19,7 @@ export interface LoginRequest {
 export interface LoginResponse {
   success: boolean;
   message: string;
-  session_id?: string;
-  user?: AuthenticatedUser;
+  user?: User;
 }
 
 export interface LogoutResponse {
@@ -28,7 +27,7 @@ export interface LogoutResponse {
   message: string;
 }
 
-export type UserProfileResponse = AuthenticatedUser;
+export type UserProfileResponse = User;
 
 export interface UserFunds {
   btc: number;
@@ -36,7 +35,8 @@ export interface UserFunds {
   usd: number;
 }
 
-export interface AuthenticatedUser {
+export interface User {
+  user_id: number;
   session_id: string;
   email: string;
   funds: UserFunds;

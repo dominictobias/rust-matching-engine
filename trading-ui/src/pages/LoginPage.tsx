@@ -20,13 +20,13 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      const data: LoginResponse = await apiCall<LoginResponse>("/api/login", {
+      const data = await apiCall<LoginResponse>("/api/login", {
         method: "POST",
         body: JSON.stringify(formData),
       });
 
-      if (data.success && data.user && data.session_id) {
-        setUser(data.user, data.session_id);
+      if (data.success && data.user) {
+        setUser(data.user);
         setLocation("/");
       } else {
         setError(data.message || "Login failed");
@@ -38,7 +38,7 @@ export default function LoginPage() {
     }
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
     const { name, value } = e.target;
     setFormData((prev) => ({
       ...prev,

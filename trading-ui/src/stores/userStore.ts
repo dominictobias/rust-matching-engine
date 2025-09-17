@@ -1,13 +1,12 @@
 import { create } from "zustand";
 import { persist, subscribeWithSelector } from "zustand/middleware";
-import type { AuthenticatedUser } from "../types/api";
+import type { User } from "../types/api";
 import { getProfile } from "../utils/api";
+import { notificationWebSocket } from "../utils/websocket";
 
 interface UserState {
   // Persisted state (stored in localStorage)
-  email: string | null;
-  sessionId: string | null;
-  user: AuthenticatedUser | null;
+  user: User | null;
 
   // Non-persisted state (not stored in localStorage)
   isAuthed: boolean;
@@ -15,7 +14,7 @@ interface UserState {
 }
 
 interface UserActions {
-  setUser: (user: AuthenticatedUser, sessionId: string) => void;
+  setUser: (user: User) => void;
   clearUser: () => void;
   setSessionChecked: (checked: boolean) => void;
   setAuthStatus: (isAuthed: boolean) => void;
@@ -26,8 +25,6 @@ interface UserActions {
 type UserStore = UserState & UserActions;
 
 const initialState: UserState = {
-  email: null,
-  sessionId: null,
   user: null,
   isAuthed: false,
   sessionChecked: false,
@@ -38,11 +35,9 @@ export const useUserStore = create<UserStore>()(
     persist(
       (set, get) => ({
         ...initialState,
-        setUser: (user: AuthenticatedUser, sessionId: string) => {
+        setUser: (user: User) => {
           set({
             user,
-            email: user.email,
-            sessionId,
             isAuthed: true,
             sessionChecked: true, // Mark as checked since we just authenticated
           });
@@ -63,21 +58,19 @@ export const useUserStore = create<UserStore>()(
           const state = get();
 
           // If no session_id, mark as checked and unauthenticated
-          if (!state.sessionId) {
+          if (!state.user?.session_id) {
             set({
               isAuthed: false,
               sessionChecked: true,
               user: null,
-              email: null,
             });
             return;
           }
 
           try {
-            const updatedUser = await getProfile(state.sessionId);
+            const updatedUser = await getProfile(state.user.session_id);
             set({
               user: updatedUser,
-              email: updatedUser.email,
               isAuthed: true,
               sessionChecked: true,
             });
@@ -91,20 +84,33 @@ export const useUserStore = create<UserStore>()(
               isAuthed: false,
               sessionChecked: true,
               user: null,
-              email: null,
             });
           }
         },
       }),
       {
         name: "user-storage",
-        version: 1,
+        version: 3,
         // Only persist these fields
         partialize: (state) => ({
-          email: state.email,
-          sessionId: state.sessionId,
           user: state.user,
         }),
+        // Handle store hydration from localStorage
+        onRehydrateStorage: () => {
+          return (state) => {
+            // After rehydration, trigger onSessionIdChange if we have a session_id
+            if (state?.user?.session_id) {
+              console.log(
+                "Store rehydrated with session_id:",
+                state.user.session_id
+              );
+              // Use setTimeout to ensure this runs after the store is fully initialized
+              setTimeout(() => {
+                onSessionIdChange(state.user!.session_id);
+              }, 0);
+            }
+          };
+        },
       }
     )
   )
@@ -112,6 +118,14 @@ export const useUserStore = create<UserStore>()(
 
 function onSessionIdChange(sessionId: string) {
   console.log("Session ID changed:", sessionId);
+
+  if (sessionId) {
+    // Connect to notifications WebSocket
+    notificationWebSocket.connect(sessionId);
+  } else {
+    // Disconnect from WebSocket when session is cleared
+    notificationWebSocket.disconnect();
+  }
 }
 
 useUserStore.subscribe(

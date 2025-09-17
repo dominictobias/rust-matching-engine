@@ -4,11 +4,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::{AppState, models::AuthenticatedUser};
+use crate::{AppState, models::User};
 
 // Axum extractor for authenticated users
 #[derive(Debug, Clone)]
-pub struct AuthUser(pub AuthenticatedUser);
+pub struct AuthUser(pub User);
 
 impl FromRequestParts<AppState> for AuthUser {
     type Rejection = Response;
@@ -40,7 +40,7 @@ impl FromRequestParts<AppState> for AuthUser {
 
         // Get user from storage
         match state.storage.get_user_by_session_id(token) {
-            Some(user) => Ok(AuthUser(AuthenticatedUser::from(user))),
+            Some(user) => Ok(AuthUser(user)),
             None => Err((StatusCode::UNAUTHORIZED, "Invalid token").into_response()),
         }
     }

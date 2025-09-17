@@ -6,7 +6,7 @@ import type {
 } from "../types/api";
 import { useUserStore } from "../stores/userStore";
 import { authenticatedApiCall } from "../utils/api";
-import { priceToTick, tickToPrice, getDecimalPlaces } from "../utils/prices";
+import { priceToTick, getDecimalPlaces } from "../utils/prices";
 
 interface OrderFormProps {
   asset: MarketAsset;
@@ -14,7 +14,7 @@ interface OrderFormProps {
 }
 
 export default function OrderForm({ asset, onOrderSuccess }: OrderFormProps) {
-  const { sessionId, refreshProfile } = useUserStore();
+  const { user, refreshProfile } = useUserStore();
 
   const [orderForm, setOrderForm] = useState<AddOrderRequest>({
     symbol: "",
@@ -23,6 +23,7 @@ export default function OrderForm({ asset, onOrderSuccess }: OrderFormProps) {
     side: "bid",
     time_in_force: "GTC",
   });
+  const [priceDisplayValue, setPriceDisplayValue] = useState<string>("");
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [orderMessage, setOrderMessage] = useState<string | null>(null);
 
@@ -34,6 +35,7 @@ export default function OrderForm({ asset, onOrderSuccess }: OrderFormProps) {
         symbol: asset.symbol,
         price_tick: 0, // Will be set when user enters price
       }));
+      setPriceDisplayValue(""); // Reset price display value
     }
   }, [asset]);
 
@@ -42,18 +44,29 @@ export default function OrderForm({ asset, onOrderSuccess }: OrderFormProps) {
     setIsSubmittingOrder(true);
     setOrderMessage(null);
 
-    if (!sessionId) {
+    if (!user?.session_id) {
       setOrderMessage("No session found. Please login again.");
+      setIsSubmittingOrder(false);
+      return;
+    }
+
+    // Validate price is not empty and is valid
+    if (priceDisplayValue === "" || orderForm.price_tick === 0) {
+      setOrderMessage("Please enter a valid price.");
       setIsSubmittingOrder(false);
       return;
     }
 
     try {
       const data: AddOrderResponse =
-        await authenticatedApiCall<AddOrderResponse>("/api/orders", sessionId, {
-          method: "POST",
-          body: JSON.stringify(orderForm),
-        });
+        await authenticatedApiCall<AddOrderResponse>(
+          "/api/orders",
+          user.session_id,
+          {
+            method: "POST",
+            body: JSON.stringify(orderForm),
+          }
+        );
 
       if (data.success) {
         setOrderMessage(
@@ -83,8 +96,37 @@ export default function OrderForm({ asset, onOrderSuccess }: OrderFormProps) {
 
   const handlePriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
-    const decimalPrice = Number(value);
+
+    // Allow empty value for better UX
+    if (value === "") {
+      setPriceDisplayValue("");
+      setOrderForm((prev) => ({
+        ...prev,
+        price_tick: 0,
+      }));
+      return;
+    }
+
+    // Only allow valid number characters and single decimal point
+    if (!/^[0-9]*\.?[0-9]*$/.test(value)) {
+      return; // Don't update if invalid characters
+    }
+
+    // Validate decimal places based on tick_multiplier
     if (asset) {
+      const maxDecimals = getDecimalPlaces(asset.tick_multiplier);
+      const decimalMatch = value.match(/\.(\d+)$/);
+      if (decimalMatch && decimalMatch[1].length > maxDecimals) {
+        return; // Don't update if more decimal places than allowed
+      }
+    }
+
+    // Update display value
+    setPriceDisplayValue(value);
+
+    // Validate that it's a valid number for tick conversion
+    const decimalPrice = parseFloat(value);
+    if (!isNaN(decimalPrice) && decimalPrice >= 0 && asset) {
       const tickValue = priceToTick(decimalPrice, asset.tick_multiplier);
       setOrderForm((prev) => ({
         ...prev,
@@ -151,17 +193,14 @@ export default function OrderForm({ asset, onOrderSuccess }: OrderFormProps) {
             Price (USD)
           </label>
           <input
-            type="number"
+            type="text"
             id="price"
             name="price"
-            value={tickToPrice(orderForm.price_tick, asset.tick_multiplier)}
+            value={priceDisplayValue}
             onChange={handlePriceChange}
-            min={`0.${"0".repeat(
-              getDecimalPlaces(asset.tick_multiplier) - 1
-            )}1`}
-            step={`0.${"0".repeat(
-              getDecimalPlaces(asset.tick_multiplier) - 1
-            )}1`}
+            placeholder={`0.${"0".repeat(
+              getDecimalPlaces(asset.tick_multiplier)
+            )}`}
             className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
