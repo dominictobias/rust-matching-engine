@@ -10,7 +10,7 @@ import OrderForm from "../composites/OrderForm";
 export default function TradePage() {
   const [, setLocation] = useLocation();
   const params = useParams<{ assetId: string }>();
-  const { session_id } = useUserStore();
+  const { sessionId } = useUserStore();
 
   const assetId = params.assetId;
   const [markets, setMarkets] = useState<MarketAsset[]>([]);
@@ -49,11 +49,11 @@ export default function TradePage() {
 
   const fetchDepthData = useCallback(
     async (symbol: string) => {
-      if (!session_id) return;
+      if (!sessionId) return;
 
       setIsLoadingDepth(true);
       try {
-        const data = await getDepth(symbol, 20, session_id);
+        const data = await getDepth(symbol, 20, sessionId);
         setDepthData(data);
       } catch (error) {
         console.error("Failed to fetch depth data:", error);
@@ -61,15 +61,15 @@ export default function TradePage() {
         setIsLoadingDepth(false);
       }
     },
-    [session_id]
+    [sessionId]
   );
 
   // Fetch depth data on component mount and when symbol changes
   useEffect(() => {
-    if (session_id && asset) {
+    if (sessionId && asset) {
       fetchDepthData(asset.symbol);
     }
-  }, [session_id, asset, fetchDepthData]);
+  }, [sessionId, asset, fetchDepthData]);
 
   const handleOrderSuccess = () => {
     // Refresh depth data after successful order

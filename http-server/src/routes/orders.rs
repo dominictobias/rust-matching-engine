@@ -6,6 +6,7 @@ use axum::{
 use matcher::types::{Order, OrderSide, TimeInForce, Trade};
 use serde::{Deserialize, Serialize};
 
+use crate::websocket::send_trade_notifications;
 use crate::{AppState, middleware::AuthUser};
 
 // Maximum allowed distance from best price as percentage (e.g., 20 = 20%)
@@ -285,6 +286,9 @@ pub async fn add_order(
         ) {
             tracing::error!("Failed to settle trade {}: {}", trade.id, error_msg);
             // Continue processing other trades even if one fails
+        } else {
+            // Send WebSocket notifications for successful trades
+            send_trade_notifications(&state.notification_manager, trade, &payload.symbol);
         }
     }
 

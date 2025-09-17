@@ -14,7 +14,7 @@ interface OrderFormProps {
 }
 
 export default function OrderForm({ asset, onOrderSuccess }: OrderFormProps) {
-  const { session_id, refreshProfile } = useUserStore();
+  const { sessionId, refreshProfile } = useUserStore();
 
   const [orderForm, setOrderForm] = useState<AddOrderRequest>({
     symbol: "",
@@ -42,7 +42,7 @@ export default function OrderForm({ asset, onOrderSuccess }: OrderFormProps) {
     setIsSubmittingOrder(true);
     setOrderMessage(null);
 
-    if (!session_id) {
+    if (!sessionId) {
       setOrderMessage("No session found. Please login again.");
       setIsSubmittingOrder(false);
       return;
@@ -50,14 +50,10 @@ export default function OrderForm({ asset, onOrderSuccess }: OrderFormProps) {
 
     try {
       const data: AddOrderResponse =
-        await authenticatedApiCall<AddOrderResponse>(
-          "/api/orders",
-          session_id,
-          {
-            method: "POST",
-            body: JSON.stringify(orderForm),
-          }
-        );
+        await authenticatedApiCall<AddOrderResponse>("/api/orders", sessionId, {
+          method: "POST",
+          body: JSON.stringify(orderForm),
+        });
 
       if (data.success) {
         setOrderMessage(

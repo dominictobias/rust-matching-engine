@@ -1,6 +1,6 @@
 use axum::{
     Router,
-    routing::{delete, get, post},
+    routing::{any, delete, get, post},
 };
 use matcher::orderbook::OrderBook;
 use std::collections::HashMap;
@@ -11,17 +11,20 @@ use tower_http::cors::CorsLayer;
 mod middleware;
 mod models;
 mod routes;
+mod websocket;
 
 use models::InMemoryStorage;
 use routes::markets::get_markets;
 use routes::orders::{add_order, cancel_order, get_depth};
 use routes::users::{get_profile, login};
+use websocket::{NotificationManager, create_notification_manager, websocket_handler};
 
 // Application state containing multiple order books and in-memory storage
 #[derive(Clone)]
 pub struct AppState {
     pub order_books: Arc<Mutex<HashMap<String, OrderBook>>>,
     pub storage: InMemoryStorage,
+    pub notification_manager: NotificationManager,
 }
 
 #[tokio::main]
@@ -47,6 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         order_books: Arc::new(Mutex::new(order_books)),
         storage,
+        notification_manager: create_notification_manager(),
     };
 
     // build our application with routes
@@ -60,6 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/users/profile", get(get_profile))
         .route("/profile", get(get_profile))
         .route("/health", get(health_check))
+        .route("/notifications", any(websocket_handler))
         .layer(ServiceBuilder::new().layer(CorsLayer::permissive()))
         .with_state(state);
 
@@ -78,5 +83,5 @@ async fn health_check() -> &'static str {
 
 // Root endpoint
 async fn root() -> &'static str {
-    "Trade Engine API - Use POST /login to authenticate, POST /orders to add orders, DELETE /orders/{id} to cancel"
+    "Trade Engine API - Use POST /login to authenticate, POST /orders to add orders, DELETE /orders/{id} to cancel, WebSocket /notifications for real-time updates"
 }
