@@ -8,6 +8,12 @@ export default defineConfig({
   server: {
     port: 6956,
     proxy: {
+      "/api/notifications": {
+        target: "http://localhost:6957",
+        ws: true,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api/, ""),
+      },
       "/api": {
         target: "http://localhost:6957",
         changeOrigin: true,

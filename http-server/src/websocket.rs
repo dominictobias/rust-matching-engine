@@ -22,6 +22,7 @@ pub enum NotificationType {
     TradeFill {
         trade: TradeNotification,
         symbol: String,
+        tick_multiplier: u64,
     },
     #[serde(rename = "order_cancelled")]
     OrderCancelled {
@@ -269,11 +270,13 @@ pub fn send_trade_notifications(
     notification_manager: &NotificationManager,
     trade: &Trade,
     symbol: &str,
+    tick_multiplier: u64,
 ) {
     // Send notification to taker
     let taker_notification = NotificationType::TradeFill {
         trade: TradeNotification::from_trade(trade, trade.taker_user_id),
         symbol: symbol.to_string(),
+        tick_multiplier,
     };
     send_notification_to_user(
         notification_manager,
@@ -286,6 +289,7 @@ pub fn send_trade_notifications(
         let maker_notification = NotificationType::TradeFill {
             trade: TradeNotification::from_trade(trade, trade.maker_user_id),
             symbol: symbol.to_string(),
+            tick_multiplier,
         };
         send_notification_to_user(
             notification_manager,

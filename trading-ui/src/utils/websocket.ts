@@ -1,4 +1,5 @@
 import toast from "react-hot-toast";
+import { getDecimalPlaces, tickToPrice } from "./prices";
 
 // Notification types matching the backend
 export interface TradeNotification {
@@ -18,6 +19,7 @@ export type NotificationType =
       type: "trade_fill";
       trade: TradeNotification;
       symbol: string;
+      tick_multiplier: number;
     }
   | {
       type: "order_cancelled";
@@ -162,12 +164,7 @@ export class NotificationWebSocket {
   private showToastNotification(notification: NotificationType): void {
     switch (notification.type) {
       case "connection_established":
-        if (notification.user_id > 0) {
-          toast.success(notification.message, {
-            duration: 3000,
-            icon: "🔗",
-          });
-        } else {
+        if (!notification.user_id) {
           toast.error(notification.message, {
             duration: 5000,
             icon: "❌",
@@ -176,9 +173,13 @@ export class NotificationWebSocket {
         break;
 
       case "trade_fill": {
-        const { trade, symbol } = notification;
+        const { trade, symbol, tick_multiplier } = notification;
         const side = trade.is_taker ? "Taker" : "Maker";
-        const priceFormatted = (trade.price_tick / 100).toFixed(2); // Assuming price is in cents
+        const decimalPlaces = getDecimalPlaces(tick_multiplier);
+        const priceFormatted = tickToPrice(
+          trade.price_tick,
+          tick_multiplier
+        ).toFixed(decimalPlaces);
         const quantityFormatted = trade.quantity.toLocaleString();
 
         toast.success(
@@ -206,7 +207,6 @@ export class NotificationWebSocket {
     }
   }
 
-  // Get current connection status
   get isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
   }
@@ -229,5 +229,4 @@ export class NotificationWebSocket {
   }
 }
 
-// Create a singleton instance
 export const notificationWebSocket = new NotificationWebSocket();

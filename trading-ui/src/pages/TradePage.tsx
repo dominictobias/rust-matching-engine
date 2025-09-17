@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { useLocation, useParams } from "wouter";
-import type { DepthResponse, MarketAsset } from "../types/api";
+import type { AddOrderRequest, DepthResponse, MarketAsset } from "../types/api";
 import { useUserStore } from "../stores/userStore";
 import { getDepth, getMarkets } from "../utils/api";
 import { tickToPrice, getDecimalPlaces } from "../utils/prices";
 import DefaultLayout from "../components/DefaultLayout";
 import OrderForm from "../composites/OrderForm";
+import { toast } from "react-hot-toast";
 
 export default function TradePage() {
   const [, setLocation] = useLocation();
@@ -71,9 +72,22 @@ export default function TradePage() {
     }
   }, [user?.session_id, asset, fetchDepthData]);
 
-  const handleOrderSuccess = () => {
-    // Refresh depth data after successful order
+  const handleOrderSuccess = (orderRequest: AddOrderRequest) => {
     if (asset) {
+      toast.success(
+        `Order Placed! ${orderRequest.side.toUpperCase()} ${asset.symbol} ${
+          orderRequest.quantity
+        } @ ${tickToPrice(
+          orderRequest.price_tick,
+          asset.tick_multiplier
+        ).toFixed(getDecimalPlaces(asset.tick_multiplier))}`,
+        {
+          duration: 5000,
+          icon: "🚀",
+        }
+      );
+
+      // Refresh depth data after successful order
       fetchDepthData(asset.symbol);
     }
   };

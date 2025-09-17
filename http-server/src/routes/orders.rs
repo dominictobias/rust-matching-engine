@@ -288,7 +288,12 @@ pub async fn add_order(
             // Continue processing other trades even if one fails
         } else {
             // Send WebSocket notifications for successful trades
-            send_trade_notifications(&state.notification_manager, trade, &payload.symbol);
+            send_trade_notifications(
+                &state.notification_manager,
+                trade,
+                &payload.symbol,
+                tick_multiplier,
+            );
         }
     }
 

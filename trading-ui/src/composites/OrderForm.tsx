@@ -10,7 +10,7 @@ import { priceToTick, getDecimalPlaces } from "../utils/prices";
 
 interface OrderFormProps {
   asset: MarketAsset;
-  onOrderSuccess: () => void;
+  onOrderSuccess: (orderRequest: AddOrderRequest) => void;
 }
 
 export default function OrderForm({ asset, onOrderSuccess }: OrderFormProps) {
@@ -82,7 +82,7 @@ export default function OrderForm({ asset, onOrderSuccess }: OrderFormProps) {
         // Refresh user profile to update balances
         await refreshProfile();
         // Notify parent component of successful order
-        onOrderSuccess();
+        onOrderSuccess(orderForm);
       } else {
         setOrderMessage(`Error: ${data.message}`);
       }
